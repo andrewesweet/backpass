@@ -93,10 +93,7 @@ test("obvious secrets are redacted before a trace reaches any model", () => {
 });
 
 test("redaction leaves benign token-count arguments alone", () => {
-  assert.equal(
-    redact("max_output_tokens:12000,yield_time_ms:1000"),
-    "max_output_tokens:12000,yield_time_ms:1000",
-  );
+  assert.equal(redact("max_output_tokens:12000,yield_time_ms:1000"), "max_output_tokens:12000,yield_time_ms:1000");
   assert.equal(
     redact("usage: { prompt_tokens: 1234, completion_tokens: 56 }"),
     "usage: { prompt_tokens: 1234, completion_tokens: 56 }",
@@ -112,19 +109,10 @@ test("redaction leaves benign token-count arguments alone", () => {
   // A fully quoted value is redacted whole, comma and all.
   assert.equal(redact('password="supersecret,withcomma"'), "password=[redacted]");
   // A truncated command leaves the quote unterminated; the secret must still go.
-  assert.equal(
-    redact('export DB_PASSWORD="hunter2hunter2secret'),
-    "export DB_PASSWORD=[redacted]",
-  );
-  assert.equal(
-    redact("aws_secret_access_key='AKIAsecretvaluehere"),
-    "aws_secret_access_key=[redacted]",
-  );
+  assert.equal(redact('export DB_PASSWORD="hunter2hunter2secret'), "export DB_PASSWORD=[redacted]");
+  assert.equal(redact("aws_secret_access_key='AKIAsecretvaluehere"), "aws_secret_access_key=[redacted]");
   // A match never consumes past the value into the next argument.
-  assert.equal(
-    redact("API_KEY=abcdef12345678, region=us-east-1"),
-    "API_KEY=[redacted], region=us-east-1",
-  );
+  assert.equal(redact("API_KEY=abcdef12345678, region=us-east-1"), "API_KEY=[redacted], region=us-east-1");
   assert.equal(redact("token=abcdefgh1234,next=1"), "token=[redacted],next=1");
 });
 
