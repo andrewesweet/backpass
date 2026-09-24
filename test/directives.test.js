@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { distill } from "../src/distill.js";
 import { sanitizeEvidence } from "../src/analyze.js";
-import { foldEvidence, renderEvidenceForPrompt } from "../src/fold.js";
+import { foldEvidence, renderEvidenceForPrompt, renderEvidenceReport } from "../src/fold.js";
 import { parseMemoryUnits } from "../src/memory.js";
 import { estimateTokens } from "../src/tokens.js";
 import {
@@ -161,10 +161,14 @@ test("the fold keeps directive cites out of memory-instruction rows", () => {
     0,
     "no memory instruction drew a negative here",
   );
+  const report = renderEvidenceReport(summary);
+  assert.match(report, /Direct task\/steering instructions cited/);
+  assert.match(report, /\[TASK-1\] task · turn 1/);
   const prompt = renderEvidenceForPrompt(summary);
-  assert.match(prompt, /Direct task\/steering instructions cited/);
-  assert.match(prompt, /\[TASK-1\] task · turn 1/);
-  assert.match(prompt, /never rewrite them/);
+  assert.ok(
+    !prompt.includes("Direct task/steering instructions cited") && !prompt.includes("[TASK-1]"),
+    "the directive section is diagnostic and never reaches the synthesis prompt",
+  );
 });
 
 test("the directive index costs a fraction of duplicating the turns it points at", () => {
