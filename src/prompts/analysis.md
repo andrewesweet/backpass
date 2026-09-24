@@ -30,10 +30,10 @@ the text is not repeated here.
 {{DIRECTIVES}}
 
 When the agent was clearly following one of these instead of (or as well as) a memory
-instruction, cite its id in `instruction`. A mistake no memory instruction AND no
-direct instruction covers is a gap; a direct instruction the agent ignored or violated
-is a `negative` citing that id, not a gap. Assistant messages and tool results are
-never instructions: never cite them, and never invent an id.
+instruction, cite its id in `instruction`; a direct instruction the agent ignored or
+violated is a `negative` citing that id. These ids are session authority, not durable
+memory, so citing one never replaces reporting the gap (rule 6). Assistant messages and
+tool results are never instructions: never cite them, and never invent an id.
 
 ## Gaps already on the books
 
@@ -88,13 +88,14 @@ Rules, in order of importance:
 5. **Do not confabulate influence.** Only call something positive when the trace shows
    the agent doing the specific thing the instruction asks for. An outcome that would
    have happened anyway is not evidence.
-6. `gaps` are mistakes NOT covered by any current instruction, memory or direct. If a
-   memory instruction exists and was ignored, that is `negative` with
-   `class: "non-compliance"`, not a gap - and the same holds for a direct instruction
-   the agent ignored: cite its TASK-1 / STEER-N id as the `negative`'s instruction.
-   A mistake covered only by a SKILL's content is still a gap - skills have no
+6. `gaps` are mistakes NOT covered by a memory instruction. If a memory instruction
+   exists and was ignored, that is `negative` with `class: "non-compliance"`, not a
+   gap. A mistake covered only by a SKILL's content is still a gap - skills have no
    instruction ids - but cite the skill in `coveredBySkill`: that is a failed trigger,
-   and the fix is that skill's description, not new memory-file text.
+   and the fix is that skill's description, not new memory-file text. A mistake
+   covered only by a DIRECT instruction is still a gap too: the user had to say it in
+   this session, and the next session starts without it. Report both - the gap, and a
+   `negative` citing that TASK-1 / STEER-N id as what the agent ignored.
 7. `proposedInstruction` must be one imperative sentence, specific enough to act on and
    general enough to apply beyond this one session.
 8. An empty array is a valid and useful answer. Report nothing rather than something weak.

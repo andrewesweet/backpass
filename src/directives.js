@@ -11,8 +11,8 @@
  *   - the first user turn's authoritative envelope is the task span (`TASK-1`)
  *   - each later substantive user turn is a steering span (`STEER-<turn>`)
  *   - every span carries source kind, turn, an authority tier distinct from project
- *     memory (`direct-task` / `direct-steering`), and a lifetime (from its turn
- *     onward, closed only by later steering with an explicit revision signal)
+ *     memory (`direct-task` / `direct-steering`), and a lifetime running from its turn
+ *     onward
  *
  * Only the authoritative envelope of a user message becomes a span. Quoted transcripts
  * (`>` blockquotes), pasted tool output and code (fenced blocks), retry reasons and
@@ -25,6 +25,9 @@
  * a `see turn N` pointer), never by duplicating turn text: task and steering text is
  * private by default, and only ids plus metadata (`directives` on the evidence
  * record) ever persist - envelope text never leaves the in-memory prompt.
+ *
+ * A span is session authority, never durable project memory: a mistake only a direct
+ * instruction covered is still a gap, because the next session starts without it.
  */
 
 export const TASK_ID = "TASK-1";
@@ -33,15 +36,6 @@ export const STEERING_AUTHORITY = "direct-steering";
 
 /** Envelopes shorter than this carry no judgable instruction (acks, greetings). */
 export const MIN_ENVELOPE_WORDS = 3;
-
-/**
- * A later steering envelope supersedes earlier spans only on an explicit revision
- * signal - a structural admission that the user is revising, not merely adding.
- * Deliberately narrow: a bare "instead" also appears in fresh instructions, and an
- * over-eager supersede would silently close a task lifetime that still governs.
- */
-const REVISION_SIGNAL =
-  /\b(actually|scratch that|forget (that|it|what i said)|ignore my (previous|last|earlier) (instructions?|message|request)|on second thought|change of plans?|disregard that|correction:)/i;
 
 const FENCE = /^\s*(```|~~~)/;
 const QUOTE = /^\s*>/;
@@ -56,49 +50,27 @@ function steeringId(turn) {
 }
 
 /**
- * Split a user message into its authoritative envelope and the embedded untrusted
- * blocks. Fenced code blocks (pasted tool output, code, retry logs) and blockquote
- * lines (quoted transcripts, pasted replies, planned actions quoted back) are
- * evidence-only, never authority. Returns the envelope plus what was excluded, so
- * tests can prove a quoted transcript never becomes instruction text.
+ * The authoritative envelope of a user message. Fenced code blocks (pasted tool output,
+ * code, retry logs) and blockquote lines (quoted transcripts, pasted replies, planned
+ * actions quoted back) are evidence-only, never authority, so they are stripped.
  */
 export function carveEnvelope(text) {
-  const excluded = [];
   const kept = [];
   let inFence = false;
-  let fenceBuffer = [];
-
-  const flushFence = () => {
-    if (fenceBuffer.length) excluded.push({ kind: "code-block", text: fenceBuffer.join("\n").trim() });
-    fenceBuffer = [];
-  };
 
   for (const line of String(text ?? "").split("\n")) {
     if (FENCE.test(line)) {
-      if (inFence) {
-        fenceBuffer.push(line);
-        flushFence();
-      } else {
-        fenceBuffer.push(line);
-      }
       inFence = !inFence;
       continue;
     }
-    if (inFence) {
-      fenceBuffer.push(line);
-      continue;
-    }
-    if (QUOTE.test(line)) {
-      excluded.push({ kind: "blockquote", text: line.replace(/^\s*>\s?/, "").trim() });
-      continue;
-    }
+    // An unclosed fence still withholds the rest: a pasted log without a closing
+    // marker is still a paste, not an instruction.
+    if (inFence) continue;
+    if (QUOTE.test(line)) continue;
     kept.push(line);
   }
-  // An unclosed fence still withholds the rest: a pasted log without a closing
-  // marker is still a paste, not an instruction.
-  if (inFence) flushFence();
 
-  return { envelope: kept.join("\n").trim(), excluded };
+  return kept.join("\n").trim();
 }
 
 function envelopeWords(envelope) {
@@ -112,30 +84,15 @@ function envelopeWords(envelope) {
  */
 export function extractDirectives(turns) {
   const spans = [];
-  const envelopes = new Map();
   let seenFirstUser = false;
   for (const entry of Array.isArray(turns) ? turns : []) {
     if (!entry || entry.role !== "user") continue;
-    const { envelope } = carveEnvelope(entry.text);
-    if (envelopeWords(envelope) < MIN_ENVELOPE_WORDS) continue;
+    if (envelopeWords(carveEnvelope(entry.text)) < MIN_ENVELOPE_WORDS) continue;
     const span = !seenFirstUser
       ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
       : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
     seenFirstUser = true;
-    spans.push({ ...span, lifetime: { fromTurn: entry.turn, toTurn: null }, supersededBy: null });
-    envelopes.set(entry.turn, envelope);
-  }
-  // Close lifetimes where a revision is detectable: each span is superseded by the
-  // next steering span whose envelope carries an explicit revision signal.
-  const revisers = spans.filter(
-    (span) => span.kind === "steering" && REVISION_SIGNAL.test(envelopes.get(span.turn) || ""),
-  );
-  for (const span of spans) {
-    const superseder = revisers.find((other) => other.turn > span.turn);
-    if (superseder) {
-      span.supersededBy = superseder.id;
-      span.lifetime.toTurn = superseder.turn;
-    }
+    spans.push({ ...span, lifetime: { fromTurn: entry.turn, toTurn: null } });
   }
   return spans;
 }
@@ -148,7 +105,6 @@ export function directiveMetadata(spans) {
     turn: span.turn,
     authority: span.authority,
     lifetime: { ...span.lifetime },
-    supersededBy: span.supersededBy,
   }));
 }
 
@@ -159,17 +115,11 @@ export function directiveMetadata(spans) {
 export function renderDirectiveIndex(spans, { elided = false } = {}) {
   const list = Array.isArray(spans) ? spans : [];
   if (!list.length) return "(none - no substantive user instruction found in the trace)";
-  const lines = list.map((span) => {
-    const life =
-      span.lifetime?.toTurn != null
-        ? `lifetime turns ${span.lifetime.fromTurn}-${span.lifetime.toTurn - 1}`
-        : `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+`;
-    const superseded = span.supersededBy ? `, superseded by [${span.supersededBy}] (explicit revision)` : "";
-    return (
+  const lines = list.map(
+    (span) =>
       `[${span.id}] ${span.kind} · turn ${span.turn} · authority ${span.authority} · ` +
-      `${life}${superseded} - see turn ${span.turn} in the trace`
-    );
-  });
+      `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+ - see turn ${span.turn} in the trace`,
+  );
   if (elided) {
     lines.push(
       "The trace middle was elided; a cited turn may sit in the elided span - " +
