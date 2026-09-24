@@ -92,6 +92,31 @@ test("obvious secrets are redacted before a trace reaches any model", () => {
   assert.equal(redact("nothing sensitive here"), "nothing sensitive here");
 });
 
+test("redaction leaves benign token-count arguments alone", () => {
+  assert.equal(
+    redact("max_output_tokens:12000,yield_time_ms:1000"),
+    "max_output_tokens:12000,yield_time_ms:1000",
+  );
+  assert.equal(redact("prompt_tokens: abcdefgh12345678"), "prompt_tokens: abcdefgh12345678");
+  assert.equal(redact("token_count: 123456789012"), "token_count: 123456789012");
+  assert.equal(
+    redact("usage: { prompt_tokens: 1234, completion_tokens: 56 }"),
+    "usage: { prompt_tokens: 1234, completion_tokens: 56 }",
+  );
+  // Purely numeric values are counts, not secrets.
+  assert.equal(redact("auth_token: 12345678"), "auth_token: 12345678");
+  // Genuine secret assignments still redact.
+  assert.match(redact("API_KEY=abcdef1234567890"), /API_KEY=\[redacted\]/);
+  assert.match(redact("GITHUB_TOKEN: abcdefgh12345678"), /GITHUB_TOKEN=\[redacted\]/);
+  assert.match(redact('password="s3cr3t-p@ss!"'), /password=\[redacted\]/);
+  assert.match(redact('password="supersecret,withcomma"'), /password=\[redacted\]/);
+  // A match never consumes past the value into the next argument.
+  assert.equal(
+    redact("API_KEY=abcdef12345678, region=us-east-1"),
+    "API_KEY=[redacted], region=us-east-1",
+  );
+});
+
 test("redaction runs on tool input and output inside the trace", () => {
   const { trace } = distill(
     [
