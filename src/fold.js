@@ -625,14 +625,14 @@ function renderEvidence(summary, { includeReportOnly }) {
     }
   }
 
-  if (Array.isArray(summary.directives) && summary.directives.length) {
+  if (includeReportOnly && summary.directives?.length) {
     lines.push("");
     lines.push("### Direct task/steering instructions cited (session authority, not memory content)");
     lines.push(
       "These ids name one session's own task message (TASK-1) or later steering (STEER-N). " +
-        "They explain behaviour the memory file did not steer. They are not memory content: " +
-        "never rewrite them, and a steering theme recurring across sessions is a gap signal, " +
-        "not an edit to these rows. Counts are cites within that session, not cross-session relevance.",
+        "They explain behaviour the memory file did not steer. Diagnostic only: counts are cites " +
+        "within that session, not cross-session relevance, and a recurring steering theme reaches " +
+        "synthesis as a gap sighting instead.",
     );
     for (const row of summary.directives) {
       lines.push(
