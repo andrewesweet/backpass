@@ -16,12 +16,9 @@ const PATTERNS = [
   [/\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/g, "JWT"],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "PRIVATE_KEY"],
   [
-    // The identifier must END with the secret word: max_output_tokens,
-    // prompt_tokens, token_count and similar telemetry names never match.
     // The value stops at whitespace, a quote, or a comma, so one argument in
     // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next.
-    // Purely numeric values (counts, limits) are left alone by the callback.
-    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY))\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|([^\s"',]{8,}))/gi,
+    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|([^\s"',]{8,}))/gi,
     "ASSIGNMENT",
   ],
 ];
@@ -35,8 +32,6 @@ export function redact(text) {
       const second = dq ?? sq ?? bare;
       // A specific pattern above may already have replaced the value; keep its label.
       if (typeof second === "string" && second.startsWith("[redacted")) return match;
-      // Counts and limits (auth_token: 12345678) are not secrets.
-      if (typeof second === "string" && /^[0-9]+$/.test(second)) return match;
       return `${first}=[redacted]`;
     });
   }
