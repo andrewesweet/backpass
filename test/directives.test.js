@@ -33,17 +33,16 @@ function fixtureEvents() {
 }
 
 test("only the authoritative envelope becomes instruction text", () => {
-  const { envelope, excluded } = carveEnvelope(fixtureEvents()[0].text);
+  const envelope = carveEnvelope(fixtureEvents()[0].text);
   assert.match(envelope, /Migrate the auth module/);
   assert.match(envelope, /Keep the public function names unchanged/);
   assert.ok(!envelope.includes("previous assistant said"), "quoted transcript must not be authority");
+  assert.ok(!envelope.includes("401 Unauthorized"), "quoted tool output must not be authority");
   assert.ok(!envelope.includes("refreshSession"), "pasted tool output must not be authority");
-  assert.deepEqual(excluded.map((entry) => entry.kind).sort(), ["blockquote", "blockquote", "code-block"]);
 });
 
 test("an unclosed fence still withholds the paste", () => {
-  const { envelope } = carveEnvelope("Do the migration.\n```\nError: boom");
-  assert.equal(envelope, "Do the migration.");
+  assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
 
 test("the first substantive user turn is the task, later ones are steering", () => {
@@ -62,21 +61,11 @@ test("the first substantive user turn is the task, later ones are steering", () 
   assert.ok(!isDirectiveId("AG-001") && !isDirectiveId("TASK-2") && !isDirectiveId("banana"));
 });
 
-test("an explicit revision closes earlier lifetimes and nothing else does", () => {
+test("every lifetime runs from its own turn onward; later steering never closes it", () => {
   const { turns } = distill(fixtureEvents(), META);
   const [task, steering] = extractDirectives(turns);
-  assert.equal(task.supersededBy, "STEER-4");
-  assert.deepEqual(task.lifetime, { fromTurn: 1, toTurn: 4 });
-  assert.equal(steering.supersededBy, null);
+  assert.deepEqual(task.lifetime, { fromTurn: 1, toTurn: null });
   assert.deepEqual(steering.lifetime, { fromTurn: 4, toTurn: null });
-
-  const plain = extractDirectives([
-    { turn: 1, role: "user", text: "Migrate the auth module to tokens." },
-    { turn: 2, role: "assistant", text: "Done." },
-    { turn: 3, role: "user", text: "Also update the changelog for this release." },
-  ]);
-  assert.equal(plain[0].supersededBy, null, "an addition is not a revision");
-  assert.deepEqual(plain[0].lifetime, { fromTurn: 1, toTurn: null });
 });
 
 test("a message that is only quotes and pastes yields no span", () => {
@@ -94,12 +83,12 @@ test("the index renders by reference and never repeats turn text", () => {
   const section = renderDirectiveIndex(spans);
   assert.match(section, /\[TASK-1\] task · turn 1 · authority direct-task/);
   assert.match(section, /see turn 1 in the trace/);
-  assert.match(section, /superseded by \[STEER-4\]/);
+  assert.match(section, /lifetime turns 1\+/);
   for (const entry of turns.filter((candidate) => candidate.role === "user")) {
-    const { envelope } = carveEnvelope(entry.text);
-    if (envelope.length > 200) {
-      assert.ok(!section.includes(envelope), `turn ${entry.turn} text must not be duplicated`);
-    }
+    assert.ok(
+      !section.includes(carveEnvelope(entry.text)),
+      `turn ${entry.turn} text must not be duplicated`,
+    );
   }
   assert.ok(trace.includes("Migrate the auth module"), "the trace itself still carries the text");
 });
@@ -152,23 +141,25 @@ test("the fold keeps directive cites out of memory-instruction rows", () => {
       },
       {
         ...base("s2"),
-        directives: [],
-        negative: [{ instruction: "TASK-1", quote: "Migrate the auth module", effect: "no span issued here" }],
+        directives: meta,
+        negative: [{ instruction: "STEER-4", quote: "old refresh-token flow", effect: "dropped it again" }],
       },
     ],
     { memoryFile },
   );
-  assert.equal(summary.directives.length, 2, "one row per session span, never merged across sessions");
+  assert.equal(summary.directives.length, 3, "one row per session span, never merged across sessions");
   const task = summary.directives.find((row) => row.sessionId === "s1" && row.id === "TASK-1");
   assert.equal(task.positive, 1);
   assert.equal(task.authority, "direct-task");
-  assert.equal(task.supersededBy, "STEER-4");
-  const stale = summary.instructions.find((row) => row.instruction === "TASK-1");
-  assert.ok(stale && stale.known === false, "the undeclared TASK-1 cite keeps today's stale-reference row");
+  assert.deepEqual(task.lifetime, { fromTurn: 1, toTurn: null });
+  assert.ok(
+    !summary.instructions.some((row) => isDirectiveId(row.instruction)),
+    "a directive cite never becomes a memory-instruction row",
+  );
   assert.equal(
     summary.totals.instructionsWithNegatives,
     0,
-    "directive negatives never enter the existing-instruction lane",
+    "no memory instruction drew a negative here",
   );
   const prompt = renderEvidenceForPrompt(summary);
   assert.match(prompt, /Direct task\/steering instructions cited/);
@@ -220,4 +211,34 @@ test("the directive index costs a fraction of duplicating the turns it points at
     `directive-spans fixture: index (${longSection} tok) must beat duplication (${duplicated} tok)`,
   );
   console.log(`directives directive-spans.json: +${longSection} tok index vs ${duplicated} tok duplicated`);
+});
+
+test("the same steer ignored in two sessions still clusters into a proposal-eligible gap", () => {
+  const meta = directiveMetadata(extractDirectives(distill(fixtureEvents(), META).turns));
+  const memoryFile = { units: parseMemoryUnits("# T\n\n- First rule\n") };
+  const session = (id) => ({
+    status: "ok",
+    transcript: { id, harness: "claude", startedAt: Date.parse("2026-08-01T00:00:00Z") },
+    directives: meta,
+    positive: [],
+    // The user had to steer it in this session, and the agent ignored the steer: a
+    // directive negative for provenance, and a gap because a directive is not memory.
+    negative: [
+      { instruction: "STEER-4", quote: "old refresh-token flow", effect: "dropped it", class: "non-compliance" },
+    ],
+    gaps: [
+      {
+        mistake: "dropped the refresh-token flow the user asked to keep",
+        proposedInstruction: "Keep the old refresh-token flow when migrating auth.",
+        recurrenceRisk: "high",
+        domain: "project",
+        quote: "old refresh-token flow",
+      },
+    ],
+  });
+  const summary = foldEvidence([session("s1"), session("s2")], { memoryFile, minGapEvidence: 2 });
+  assert.equal(summary.gaps.length, 1, "the recurring steer is one proposal-eligible gap cluster");
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.equal(summary.totals.gapSightings, 2);
+  assert.equal(summary.directives.length, 2, "the steer keeps its per-session provenance rows");
 });

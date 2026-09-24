@@ -1,5 +1,4 @@
 import { renderHunkLines } from "./diff.js";
-import { isDirectiveId } from "./directives.js";
 import { normalizeSourceLabel } from "./gap-ledger.js";
 import { mixFromCounts } from "./interaction.js";
 import { memoryTextHash } from "./memory.js";
@@ -833,10 +832,7 @@ function funnelInstructionOutcome(summary, accepted, suppressed) {
     typeof summary.totals.reportOnlyByReason !== "object"
   )
     return null;
-  // Directive-shaped ids are never existing memory instructions (declared ones render
-  // in their own fold section; undeclared ones are stale references), so the
-  // existing-instruction lane of the funnel skips them. Display only; no gate reads it.
-  const candidates = summary.instructions.filter((row) => row.negative > 0 && !isDirectiveId(row.instruction));
+  const candidates = summary.instructions.filter((row) => row.negative > 0);
   const candidateIds = new Set(candidates.map((row) => row.instruction));
   const acceptedIds = new Set(accepted.flatMap((edit) => edit.instructions || []).filter((id) => candidateIds.has(id)));
   const suppressedIds = new Set(

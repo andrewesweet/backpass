@@ -112,8 +112,7 @@ export function foldEvidence(
   const recordSources = issuedSources.slice(0, usable.length);
   const observationSources = issuedSources.slice(usable.length);
   // Declared direct-instruction spans per session: only a TASK-/STEER- id this
-  // session's own analysis was issued counts as a directive citation. Anything else
-  // in that shape is a hallucinated id and keeps today's stale-reference row.
+  // session's own analysis was issued counts as a directive citation.
   const declaredDirectives = new Map();
   for (const record of usable) {
     const sessionIdentity = record.transcript.identity || record.transcript.id;
@@ -136,7 +135,6 @@ export function foldEvidence(
         turn: span.turn ?? null,
         authority: span.authority ?? null,
         lifetime: span.lifetime ?? null,
-        supersededBy: span.supersededBy ?? null,
         source,
         sessionId: sessionIdentity,
         positive: 0,
@@ -349,11 +347,8 @@ export function foldEvidence(
       droppedGapSingletons,
       orchestrationGapSightings,
       // The existing-instruction lane's candidate count: how many instructions the
-      // negatives land on. Display only; no gate reads it. Directive-shaped ids are
-      // never existing memory instructions - declared ones have their own section,
-      // undeclared ones are stale references - so neither enters this lane.
-      instructionsWithNegatives: instructionRows.filter((row) => row.negative > 0 && !isDirectiveId(row.instruction))
-        .length,
+      // negatives land on. Display only; no gate reads it.
+      instructionsWithNegatives: instructionRows.filter((row) => row.negative > 0).length,
       usedRawTranscript: usedRawCount,
       crossSurfaceDuplicates: duplicates.length,
     },
@@ -640,14 +635,10 @@ function renderEvidence(summary, { includeReportOnly }) {
         "not an edit to these rows. Counts are cites within that session, not cross-session relevance.",
     );
     for (const row of summary.directives) {
-      const life =
-        row.lifetime?.toTurn != null
-          ? `lifetime turns ${row.lifetime.fromTurn}-${row.lifetime.toTurn - 1}`
-          : `lifetime turns ${row.turn}+`;
-      const superseded = row.supersededBy ? ` superseded by [${row.supersededBy}]` : "";
       lines.push(
         `- [${row.id}] ${row.kind ?? "steering"} · turn ${row.turn} · authority ${row.authority ?? "direct"} · ` +
-          `${life}${superseded} +${row.positive} -${row.negative} (from ${row.source})`,
+          `lifetime turns ${row.lifetime?.fromTurn ?? row.turn}+ ` +
+          `+${row.positive} -${row.negative} (from ${row.source})`,
       );
       for (const quote of row.quotes.slice(0, 3)) {
         const sign = quote.polarity === "negative" ? "-" : "+";
