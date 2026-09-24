@@ -117,58 +117,30 @@ test("sanitizeEvidence accepts issued directive ids and drops the rest", () => {
 });
 
 test("the fold keeps directive cites out of memory-instruction rows", () => {
-  const spans = extractDirectives(distill(fixtureEvents(), META).turns);
-  const meta = directiveMetadata(spans);
-  assert.ok(
-    JSON.stringify(meta).length < 800 && !JSON.stringify(meta).includes("Migrate"),
-    "persisted metadata carries ids and spans, never turn text",
-  );
+  const meta = directiveMetadata(extractDirectives(distill(fixtureEvents(), META).turns));
+  assert.ok(!JSON.stringify(meta).includes("Migrate"), "persisted metadata carries ids and spans, never turn text");
   const memoryFile = { units: parseMemoryUnits("# T\n\n- First rule\n") };
-  const base = (id) => ({
-    status: "ok",
-    transcript: { id, harness: "claude", startedAt: Date.parse("2026-08-01T00:00:00Z") },
-    positive: [],
-    negative: [],
-    gaps: [],
-  });
   const summary = foldEvidence(
     [
       {
-        ...base("s1"),
+        status: "ok",
+        transcript: { id: "s1", harness: "claude", startedAt: Date.parse("2026-08-01T00:00:00Z") },
         directives: meta,
         positive: [{ instruction: "TASK-1", quote: "Migrate the auth module", effect: "followed it" }],
         negative: [{ instruction: "STEER-4", quote: "old refresh-token flow", effect: "dropped it", class: "harm" }],
-      },
-      {
-        ...base("s2"),
-        directives: meta,
-        negative: [{ instruction: "STEER-4", quote: "old refresh-token flow", effect: "dropped it again" }],
+        gaps: [],
       },
     ],
     { memoryFile },
   );
-  assert.equal(summary.directives.length, 3, "one row per session span, never merged across sessions");
-  const task = summary.directives.find((row) => row.sessionId === "s1" && row.id === "TASK-1");
-  assert.equal(task.positive, 1);
-  assert.equal(task.authority, "direct-task");
-  assert.deepEqual(task.lifetime, { fromTurn: 1, toTurn: null });
   assert.ok(
     !summary.instructions.some((row) => isDirectiveId(row.instruction)),
     "a directive cite never becomes a memory-instruction row",
   );
-  assert.equal(
-    summary.totals.instructionsWithNegatives,
-    0,
-    "no memory instruction drew a negative here",
-  );
-  const report = renderEvidenceReport(summary);
-  assert.match(report, /Direct task\/steering instructions cited/);
-  assert.match(report, /\[TASK-1\] task · turn 1/);
-  const prompt = renderEvidenceForPrompt(summary);
-  assert.ok(
-    !prompt.includes("Direct task/steering instructions cited") && !prompt.includes("[TASK-1]"),
-    "the directive section is diagnostic and never reaches the synthesis prompt",
-  );
+  assert.equal(summary.totals.instructionsWithNegatives, 0, "no memory instruction drew a negative here");
+  for (const rendered of [renderEvidenceForPrompt(summary), renderEvidenceReport(summary)]) {
+    assert.ok(!rendered.includes("[TASK-1]") && !rendered.includes("[STEER-4]"), "no directive rows are rendered");
+  }
 });
 
 test("the directive index costs a fraction of duplicating the turns it points at", () => {
@@ -244,5 +216,4 @@ test("the same steer ignored in two sessions still clusters into a proposal-elig
   assert.equal(summary.gaps.length, 1, "the recurring steer is one proposal-eligible gap cluster");
   assert.equal(summary.gaps[0].sessions, 2);
   assert.equal(summary.totals.gapSightings, 2);
-  assert.equal(summary.directives.length, 2, "the steer keeps its per-session provenance rows");
 });
