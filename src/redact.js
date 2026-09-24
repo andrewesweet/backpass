@@ -16,8 +16,10 @@ const PATTERNS = [
   [/\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/g, "JWT"],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "PRIVATE_KEY"],
   [
-    // The value stops at whitespace, a quote, or a comma, so one argument in
-    // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next.
+    // An unquoted value stops at whitespace, a quote, or a comma, so one argument in
+    // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next. A closed
+    // quote still wins first, so a quoted secret is redacted whole even with a comma in
+    // it, and an unterminated quote falls back to the bounded unquoted form.
     /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|["']?([^\s"',]{8,}))/gi,
     "ASSIGNMENT",
   ],
