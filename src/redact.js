@@ -18,7 +18,7 @@ const PATTERNS = [
   [
     // The value stops at whitespace, a quote, or a comma, so one argument in
     // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next.
-    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|([^\s"',]{8,}))/gi,
+    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|["']?([^\s"',]{8,}))/gi,
     "ASSIGNMENT",
   ],
 ];
