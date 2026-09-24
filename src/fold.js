@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { loadConfig } from "./config.js";
 import { classifyInteraction, INTERACTIVE, NON_INTERACTIVE } from "./interaction.js";
+import { isDirectiveId } from "./directives.js";
 import { findInstructionUnit, instructionUnits, resolveMemoryFiles, similarity } from "./memory.js";
 import {
   GAP_COVERED_THRESHOLD,
@@ -110,17 +111,69 @@ export function foldEvidence(
   ]);
   const recordSources = issuedSources.slice(0, usable.length);
   const observationSources = issuedSources.slice(usable.length);
+  // Declared direct-instruction spans per session: only a TASK-/STEER- id this
+  // session's own analysis was issued counts as a directive citation. Anything else
+  // in that shape is a hallucinated id and keeps today's stale-reference row.
+  const declaredDirectives = new Map();
+  for (const record of usable) {
+    const sessionIdentity = record.transcript.identity || record.transcript.id;
+    if (!Array.isArray(record.directives)) continue;
+    const byId = new Map();
+    for (const span of record.directives) {
+      if (span && isDirectiveId(span.id)) byId.set(span.id, span);
+    }
+    if (byId.size) declaredDirectives.set(sessionIdentity, byId);
+  }
+  // Session-scoped directive cites: one row per (session, span), never merged
+  // across sessions and never mixed into memory-instruction relevance.
+  const directiveBuckets = new Map();
+  const touchDirective = (sessionIdentity, source, span) => {
+    const key = `${sessionIdentity} ${span.id}`;
+    if (!directiveBuckets.has(key)) {
+      directiveBuckets.set(key, {
+        id: span.id,
+        kind: span.kind ?? null,
+        turn: span.turn ?? null,
+        authority: span.authority ?? null,
+        lifetime: span.lifetime ?? null,
+        supersededBy: span.supersededBy ?? null,
+        source,
+        sessionId: sessionIdentity,
+        positive: 0,
+        negative: 0,
+        quotes: [],
+      });
+    }
+    return directiveBuckets.get(key);
+  };
   for (const [index, record] of usable.entries()) {
     if (record.usedRawTranscript) usedRawCount += 1;
     const source = recordSources[index];
     sources.add(source);
     if (record.transcript.project) sourceProjects[source] = record.transcript.project;
+    const sessionIdentity = record.transcript.identity || record.transcript.id;
+    const declared = declaredDirectives.get(sessionIdentity);
 
     for (const polarity of ["positive", "negative"]) {
       for (const item of record[polarity] || []) {
+        const span = declared?.get(item.instruction);
+        if (span) {
+          const entry = touchDirective(sessionIdentity, source, span);
+          entry[polarity] += 1;
+          entry.quotes.push({
+            polarity,
+            text: item.quote,
+            effect: item.effect,
+            moment: item.moment,
+            class: polarity === "negative" ? (item.class ?? null) : undefined,
+            source,
+          });
+          if (polarity === "positive") positiveCount += 1;
+          else negativeCount += 1;
+          continue;
+        }
         const entry = touch(item.instruction);
         entry[polarity] += 1;
-        const sessionIdentity = record.transcript.identity || record.transcript.id;
         const category = classifyInteraction(record.transcript);
         entry.sessions.add(sessionIdentity);
         entry.sessionsByInteraction[category].add(sessionIdentity);
@@ -296,12 +349,18 @@ export function foldEvidence(
       droppedGapSingletons,
       orchestrationGapSightings,
       // The existing-instruction lane's candidate count: how many instructions the
-      // negatives land on. Display only; no gate reads it.
-      instructionsWithNegatives: instructionRows.filter((row) => row.negative > 0).length,
+      // negatives land on. Display only; no gate reads it. Directive-shaped ids are
+      // never existing memory instructions - declared ones have their own section,
+      // undeclared ones are stale references - so neither enters this lane.
+      instructionsWithNegatives: instructionRows.filter((row) => row.negative > 0 && !isDirectiveId(row.instruction))
+        .length,
       usedRawTranscript: usedRawCount,
       crossSurfaceDuplicates: duplicates.length,
     },
     instructions: instructionRows,
+    directives: [...directiveBuckets.values()]
+      .map((entry) => ({ ...entry, quotes: entry.quotes.slice(0, 6) }))
+      .sort((a, b) => String(a.source).localeCompare(String(b.source)) || (a.turn ?? 0) - (b.turn ?? 0)),
     sources: [...sources],
     sourceProjects,
     parentHarmSessions,
@@ -568,6 +627,34 @@ function renderEvidence(summary, { includeReportOnly }) {
       const cls = quote.polarity === "negative" ? ` [${quote.class ?? "unclassified"}]` : "";
       const effect = quote.effect ? ` :: ${oneLine(quote.effect, 200)}` : "";
       lines.push(`    ${sign}${cls} "${oneLine(quote.text)}"${effect} (${quote.source})`);
+    }
+  }
+
+  if (Array.isArray(summary.directives) && summary.directives.length) {
+    lines.push("");
+    lines.push("### Direct task/steering instructions cited (session authority, not memory content)");
+    lines.push(
+      "These ids name one session's own task message (TASK-1) or later steering (STEER-N). " +
+        "They explain behaviour the memory file did not steer. They are not memory content: " +
+        "never rewrite them, and a steering theme recurring across sessions is a gap signal, " +
+        "not an edit to these rows. Counts are cites within that session, not cross-session relevance.",
+    );
+    for (const row of summary.directives) {
+      const life =
+        row.lifetime?.toTurn != null
+          ? `lifetime turns ${row.lifetime.fromTurn}-${row.lifetime.toTurn - 1}`
+          : `lifetime turns ${row.turn}+`;
+      const superseded = row.supersededBy ? ` superseded by [${row.supersededBy}]` : "";
+      lines.push(
+        `- [${row.id}] ${row.kind ?? "steering"} · turn ${row.turn} · authority ${row.authority ?? "direct"} · ` +
+          `${life}${superseded} +${row.positive} -${row.negative} (from ${row.source})`,
+      );
+      for (const quote of row.quotes.slice(0, 3)) {
+        const sign = quote.polarity === "negative" ? "-" : "+";
+        const cls = quote.polarity === "negative" ? ` [${quote.class ?? "unclassified"}]` : "";
+        const effect = quote.effect ? ` :: ${oneLine(quote.effect, 200)}` : "";
+        lines.push(`    ${sign}${cls} "${oneLine(quote.text)}"${effect} (${quote.source})`);
+      }
     }
   }
 

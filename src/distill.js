@@ -100,6 +100,10 @@ export function isBoilerplate(text) {
 export function distill(events, meta, options = {}) {
   const maxTraceTokens = options.maxTraceTokens ?? 12000;
   const lines = [];
+  // Message turns in trace order, with the same turn numbers the trace prints: the
+  // single source of truth for anything that points at a turn (directive spans in
+  // `src/directives.js`). Text is the redacted form the model actually sees.
+  const turns = [];
   let userTurns = 0;
   let assistantTurns = 0;
   let toolCalls = 0;
@@ -113,6 +117,7 @@ export function distill(events, meta, options = {}) {
       turn += 1;
       if (event.role === "user") userTurns += 1;
       else assistantTurns += 1;
+      turns.push({ turn, role: event.role, text });
       lines.push(`### turn ${turn} · ${event.role}`);
       lines.push(text);
       lines.push("");
@@ -152,6 +157,7 @@ export function distill(events, meta, options = {}) {
 
   return {
     trace,
+    turns,
     stats: {
       userTurns,
       assistantTurns,

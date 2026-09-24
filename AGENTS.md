@@ -221,6 +221,7 @@ list` only sees this clone. `attachSiblingClones` in `src/repo.js` also searches
   negative (`harm` / `non-compliance` / `irrelevant`, `sanitizeEvidence` drops other
   values) and `renderEvidenceForPrompt` renders the class AND the `effect` text with each
   quote. Records from before the class existed carry none, and none never counts as harm.
+- **Direct task/steering instructions are addressable, envelope-only, and session-scoped** (`src/directives.js`). The first substantive user turn is the task span (`TASK-1`), later ones are steering (`STEER-<turn>`), each with authority `direct-task`/`direct-steering` and a lifetime closed only by an explicit revision signal. Only the authoritative envelope indexes: fenced blocks and `>` quotes are structurally excluded, and assistant/tool text never becomes a span. Spans render in the analysis prompt by turn reference, never by duplicating turn text; only ids plus metadata persist on the evidence record. The fold validates cites against the spans the session issued and renders them apart from memory-instruction rows, outside the existing-instruction funnel lane.
 - **A quote must be findable in the trace it claims to come from.** `sanitizeEvidence`
   (`src/analyze.js`) drops any evidence item whose quote is not a whitespace-folded
   substring of the distilled trace, counting the drops into `summary.quotesNotInTrace` so a
