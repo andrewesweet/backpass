@@ -235,9 +235,9 @@ async function analyzeOne({
   );
   return {
     status: "ok",
-    // Directive metadata persists on the record so the fold can validate citations
-    // against the ids this session actually issued. Ids and spans only - envelope
-    // text never leaves the in-memory prompt (see `src/directives.js`).
+    // The record carries this session's directive span metadata - ids, turn, authority
+    // and lifetime, never envelope text - so a cited TASK-1 / STEER-N id stays
+    // resolvable in persisted evidence (see `src/directives.js`).
     evidence: { ...evidence, directives: directiveMetadata(directives) },
     usage: usageRecord(ranWith, result),
     distilled,
