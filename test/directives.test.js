@@ -45,27 +45,45 @@ test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
 
-test("the first substantive user turn is the task, later ones are steering", () => {
+test("the first user turn is the task, later ones are steering; assistant and tool turns never index", () => {
   const { turns } = distill(fixtureEvents(), META);
   const spans = extractDirectives(turns);
   assert.deepEqual(
     spans.map((span) => [span.id, span.kind, span.turn, span.authority]),
     [
       [TASK_ID, "task", 1, "direct-task"],
+      ["STEER-3", "steering", 3, "direct-steering"],
       ["STEER-4", "steering", 4, "direct-steering"],
     ],
   );
-  // "thanks" is an ack, not an instruction; the assistant reply and tool result never index.
-  assert.ok(spans.every((span) => span.turn !== 2 && span.turn !== 3));
+  assert.ok(
+    spans.every((span) => span.turn !== 2),
+    "the assistant reply and the tool result never index",
+  );
   assert.ok(isDirectiveId("TASK-1") && isDirectiveId("STEER-4"));
   assert.ok(!isDirectiveId("AG-001") && !isDirectiveId("TASK-2") && !isDirectiveId("banana"));
 });
 
+test("a short imperative is addressable: length never decides which turn is the task", () => {
+  const spans = extractDirectives([
+    { turn: 1, role: "user", text: "ship it" },
+    { turn: 2, role: "user", text: "Add tests." },
+    { turn: 3, role: "user", text: "Use pnpm, never npm." },
+  ]);
+  assert.deepEqual(
+    spans.map((span) => [span.id, span.kind, span.turn]),
+    [
+      [TASK_ID, "task", 1],
+      ["STEER-2", "steering", 2],
+      ["STEER-3", "steering", 3],
+    ],
+  );
+});
+
 test("every lifetime runs from its own turn onward; later steering never closes it", () => {
   const { turns } = distill(fixtureEvents(), META);
-  const [task, steering] = extractDirectives(turns);
-  assert.deepEqual(task.lifetime, { fromTurn: 1, toTurn: null });
-  assert.deepEqual(steering.lifetime, { fromTurn: 4, toTurn: null });
+  const spans = extractDirectives(turns);
+  for (const span of spans) assert.deepEqual(span.lifetime, { fromTurn: span.turn, toTurn: null });
 });
 
 test("a message that is only quotes and pastes yields no span", () => {
