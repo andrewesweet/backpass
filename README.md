@@ -329,7 +329,8 @@ later steering turn (`STEER-<turn>`) become citable instruction sources with the
 authority, alongside the memory-file ids. Only the authoritative part of a user turn counts:
 fenced blocks and quoted lines are pasted evidence, never instructions, and assistant or tool
 text never becomes one. The index points at a turn already in the trace instead of repeating
-its text, and only the ids and their metadata persist in the evidence record. Direct
+its text - or says that turn was elided from the trace, when the session was long enough to
+be capped - and only the ids and their metadata persist in the evidence record. Direct
 instructions are session authority, not durable memory, so a mistake covered only by one is
 still reported as a gap - the user had to say it in this session, and the next session starts
 without it - and their citations do not score a memory-file instruction.
