@@ -312,8 +312,8 @@ equally reproducible sample.
 
 Each distilled trace goes to a cheap model with the memory file, the project skill index,
 an index of this session's direct instructions, and a rubric. It returns strict JSON: which
-instructions helped, which were violated, and
-what mistakes no memory instruction covers. Every negative carries a class - `harm` (following the instruction
+instructions helped, which were violated, and what mistakes no memory instruction covers.
+Every negative carries a class - `harm` (following the instruction
 caused damage), `non-compliance` (the agent ignored it), or `irrelevant` - because those
 argue for opposite fates: harm argues against an instruction, non-compliance argues for
 reinforcing it. Every gap carries a domain - `orchestration` when the mistake was caused
