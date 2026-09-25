@@ -61,12 +61,7 @@ export function carveEnvelope(text) {
       // CommonMark: only a fence of the opener's character, at least as long, with
       // nothing but whitespace after it, closes the block. A shorter or different
       // inner fence is part of the paste.
-      if (
-        fence &&
-        fence[1][0] === opener.char &&
-        fence[1].length >= opener.length &&
-        fence[2].trim() === ""
-      ) {
+      if (fence && fence[1][0] === opener.char && fence[1].length >= opener.length && fence[2].trim() === "") {
         opener = null;
       }
       // An unclosed fence still withholds the rest: a pasted log without a closing
