@@ -36,9 +36,17 @@ export const TASK_ID = "TASK-1";
 export const TASK_AUTHORITY = "direct-task";
 export const STEERING_AUTHORITY = "direct-steering";
 
-// CommonMark: four or more leading spaces is indented code, not a fence or a quote.
-const FENCE = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;
-const QUOTE = /^ {0,3}>/;
+const FENCE = /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/;
+const QUOTE = /^\s*>/;
+
+// CommonMark counts a tab as four columns, and fence indentation is relative: an opener
+// may sit at any indentation (a list-item code block is still a fence), while its closer
+// may be indented at most three columns further.
+function indentColumns(prefix) {
+  let columns = 0;
+  for (const char of prefix) columns += char === "\t" ? 4 : 1;
+  return columns;
+}
 
 /** A span id is stable by construction: kind plus the distilled turn it points at. */
 export function isDirectiveId(id) {
@@ -62,9 +70,16 @@ export function carveEnvelope(text) {
     const fence = FENCE.exec(line);
     if (opener) {
       // CommonMark: only a fence of the opener's character, at least as long, with
-      // nothing but whitespace after it, closes the block. A shorter or different
-      // inner fence is part of the paste.
-      if (fence && fence[1][0] === opener.char && fence[1].length >= opener.length && fence[2].trim() === "") {
+      // nothing but whitespace after it and indented no more than three columns past
+      // the opener, closes the block. A shorter, different or deeper inner fence is
+      // part of the paste.
+      if (
+        fence &&
+        fence[2][0] === opener.char &&
+        fence[2].length >= opener.length &&
+        fence[3].trim() === "" &&
+        indentColumns(fence[1]) <= opener.indent + 3
+      ) {
         opener = null;
       }
       // An unclosed fence still withholds the rest: a pasted log without a closing
@@ -73,8 +88,8 @@ export function carveEnvelope(text) {
     }
     // CommonMark: a backtick fence's info string may not contain a backtick, so a line
     // of inline code is instruction text, not an opener.
-    if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
-      opener = { char: fence[1][0], length: fence[1].length };
+    if (fence && !(fence[2][0] === "`" && fence[3].includes("`"))) {
+      opener = { char: fence[2][0], length: fence[2].length, indent: indentColumns(fence[1]) };
       continue;
     }
     if (QUOTE.test(line)) continue;
