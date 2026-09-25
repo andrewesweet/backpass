@@ -41,6 +41,24 @@ test("only the authoritative envelope becomes instruction text", () => {
   assert.ok(!envelope.includes("refreshSession"), "pasted tool output must not be authority");
 });
 
+test("a nested inner fence stays inside the paste; the outer fence closes it", () => {
+  const envelope = carveEnvelope(
+    ["Update the README:", "````md", "# doc", "```bash", "rm -rf build", "```", "````", "Keep the examples short."].join(
+      "\n",
+    ),
+  );
+  assert.ok(!envelope.includes("rm -rf build"), "pasted command must not be authority");
+  assert.ok(!envelope.includes("# doc"), "pasted doc body must not be authority");
+  assert.match(envelope, /Update the README:/);
+  assert.match(envelope, /Keep the examples short\./);
+});
+
+test("a tilde fence never closes a backtick block", () => {
+  const envelope = carveEnvelope(["Fix this:", "```", "~~~", "rm -rf build", "```", "Run the tests."].join("\n"));
+  assert.ok(!envelope.includes("rm -rf build"), "the tilde line does not close the backtick fence");
+  assert.match(envelope, /Run the tests\./);
+});
+
 test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
