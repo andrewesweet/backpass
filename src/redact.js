@@ -19,8 +19,10 @@ const PATTERNS = [
     // An unquoted value stops at whitespace, a quote, or a comma, so one argument in
     // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next. A closed
     // quote still wins first, so a quoted secret is redacted whole even with a comma in
-    // it, and an unterminated quote falls back to the bounded unquoted form.
-    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"\n]{8,})"|'([^'\n]{8,})'|["']?([^\s"',]{8,}))/gi,
+    // it, and an unterminated quote falls back to the bounded unquoted form. A quoted
+    // value may span newlines only when its closing quote ends the line (or is followed
+    // by a value separator), so a stray quote later in the prose cannot swallow it.
+    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"(?=[ \t]*(?:$|[,;})\]]))|'([^']{8,})'(?=[ \t]*(?:$|[,;})\]]))|"([^"\n]{8,})"|'([^'\n]{8,})'|["']?([^\s"',]{8,}))/gim,
     "ASSIGNMENT",
   ],
 ];
@@ -29,9 +31,9 @@ export function redact(text) {
   if (!text) return text;
   let out = String(text);
   for (const [pattern, label] of PATTERNS) {
-    out = out.replace(pattern, (match, first, dq, sq, bare) => {
+    out = out.replace(pattern, (match, first, dqMulti, sqMulti, dq, sq, bare) => {
       if (label !== "ASSIGNMENT") return `[redacted:${label}]`;
-      const second = dq ?? sq ?? bare;
+      const second = dqMulti ?? sqMulti ?? dq ?? sq ?? bare;
       // A specific pattern above may already have replaced the value; keep its label.
       if (typeof second === "string" && second.startsWith("[redacted")) return match;
       return `${first}=[redacted]`;

@@ -111,8 +111,10 @@ test("redaction leaves benign token-count arguments alone", () => {
   // A truncated command leaves the quote unterminated; the secret must still go.
   assert.equal(redact('export DB_PASSWORD="hunter2hunter2secret'), "export DB_PASSWORD=[redacted]");
   assert.equal(redact("aws_secret_access_key='AKIAsecretvaluehere"), "aws_secret_access_key=[redacted]");
-  // A quoted value never spans lines: an unterminated quote falls back to the
-  // bounded unquoted form, so the following text survives.
+  // A closed quoted value may span lines when its closing quote ends the line.
+  assert.equal(redact('PASSWORD="abcdefgh\nijklmnop"'), "PASSWORD=[redacted]");
+  // An unterminated quote falls back to the bounded unquoted form, so the
+  // following text survives.
   assert.equal(
     redact('DB_PASSWORD="hunter2hunter2secret\nRun tests and note "done"'),
     'DB_PASSWORD=[redacted]\nRun tests and note "done"',
