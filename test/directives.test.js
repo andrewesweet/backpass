@@ -59,6 +59,12 @@ test("a tilde fence never closes a backtick block", () => {
   assert.match(envelope, /Run the tests\./);
 });
 
+test("a line of inline code is instruction text, not a fence opener", () => {
+  const envelope = carveEnvelope("```pnpm run check``` must pass before you push.\nAlso update the README.");
+  assert.match(envelope, /must pass before you push\./);
+  assert.match(envelope, /Also update the README\./);
+});
+
 test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
