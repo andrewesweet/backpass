@@ -111,6 +111,12 @@ test("redaction leaves benign token-count arguments alone", () => {
   // A truncated command leaves the quote unterminated; the secret must still go.
   assert.equal(redact('export DB_PASSWORD="hunter2hunter2secret'), "export DB_PASSWORD=[redacted]");
   assert.equal(redact("aws_secret_access_key='AKIAsecretvaluehere"), "aws_secret_access_key=[redacted]");
+  // A quoted value never spans lines: an unterminated quote falls back to the
+  // bounded unquoted form, so the following text survives.
+  assert.equal(
+    redact('DB_PASSWORD="hunter2hunter2secret\nRun tests and note "done"'),
+    'DB_PASSWORD=[redacted]\nRun tests and note "done"',
+  );
   // A match never consumes past the value into the next argument.
   assert.equal(redact("API_KEY=abcdef12345678, region=us-east-1"), "API_KEY=[redacted], region=us-east-1");
   assert.equal(redact("token=abcdefgh1234,next=1"), "token=[redacted],next=1");

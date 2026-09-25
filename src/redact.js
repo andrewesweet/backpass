@@ -20,7 +20,7 @@ const PATTERNS = [
     // `max_output_tokens:12000,yield_time_ms:1000` can never swallow the next. A closed
     // quote still wins first, so a quoted secret is redacted whole even with a comma in
     // it, and an unterminated quote falls back to the bounded unquoted form.
-    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]{8,})"|'([^']{8,})'|["']?([^\s"',]{8,}))/gi,
+    /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"\n]{8,})"|'([^'\n]{8,})'|["']?([^\s"',]{8,}))/gi,
     "ASSIGNMENT",
   ],
 ];
