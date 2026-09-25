@@ -114,6 +114,29 @@ test("an over-limit turn keeps its instruction when the closing fence falls in t
   assert.equal(turns[0].envelope, "Keep the public API stable.");
 });
 
+test("an over-limit turn whose only instruction is clamped out is marked clamped, not pointed at", () => {
+  const filler = (label) => `${label} log line detail\n`.repeat(300);
+  const { turns, trace } = distill(
+    [
+      {
+        kind: "message",
+        role: "user",
+        text: `${filler("head")}Keep the public API stable.\n${filler("tail")}`,
+      },
+      { kind: "message", role: "assistant", text: "Will do." },
+    ],
+    META,
+  );
+  assert.ok(!turns[0].text.includes("Keep the public API stable."), "the instruction sits in the clamped middle");
+  assert.ok(!trace.includes("Keep the public API stable."), "the trace never carries the instruction");
+  assert.match(turns[0].envelope, /Keep the public API stable\./);
+  const spans = extractDirectives(turns);
+  assert.equal(spans[0].clamped, true);
+  const section = renderDirectiveIndex(spans);
+  assert.match(section, /turn 1 - clamped from the trace, open the raw transcript for its text/);
+  assert.ok(!section.includes("see turn 1 in the trace"));
+});
+
 test("the first user turn is the task, later ones are steering; assistant and tool turns never index", () => {
   const { turns } = distill(fixtureEvents(), META);
   const spans = extractDirectives(turns);
