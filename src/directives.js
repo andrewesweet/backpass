@@ -73,7 +73,9 @@ export function carveEnvelope(text) {
       // marker is still a paste, not an instruction.
       continue;
     }
-    if (fence) {
+    // CommonMark: a backtick fence's info string may not contain a backtick, so a line
+    // of inline code is instruction text, not an opener.
+    if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
       opener = { char: fence[1][0], length: fence[1].length };
       continue;
     }
