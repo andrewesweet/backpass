@@ -111,27 +111,18 @@ export function foldEvidence(
   ]);
   const recordSources = issuedSources.slice(0, usable.length);
   const observationSources = issuedSources.slice(usable.length);
-  // A direct task/steering cite is session authority, not memory content: the ids this
-  // session's own analysis was issued never become memory-instruction rows. The gap
-  // sightings carry the recurrence signal instead.
-  const declaredDirectives = new Map();
-  for (const record of usable) {
-    const sessionIdentity = record.transcript.identity || record.transcript.id;
-    if (!Array.isArray(record.directives)) continue;
-    const ids = new Set(record.directives.filter((span) => span && isDirectiveId(span.id)).map((span) => span.id));
-    if (ids.size) declaredDirectives.set(sessionIdentity, ids);
-  }
   for (const [index, record] of usable.entries()) {
     if (record.usedRawTranscript) usedRawCount += 1;
     const source = recordSources[index];
     sources.add(source);
     if (record.transcript.project) sourceProjects[source] = record.transcript.project;
     const sessionIdentity = record.transcript.identity || record.transcript.id;
-    const declared = declaredDirectives.get(sessionIdentity);
 
     for (const polarity of ["positive", "negative"]) {
       for (const item of record[polarity] || []) {
-        if (declared?.has(item.instruction)) continue;
+        // A direct task/steering cite is session authority, not memory content, so it
+        // never becomes a memory-instruction row; the gap sightings carry recurrence.
+        if (isDirectiveId(item.instruction)) continue;
         const entry = touch(item.instruction);
         entry[polarity] += 1;
         const category = classifyInteraction(record.transcript);

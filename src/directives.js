@@ -8,8 +8,8 @@
  * instruction" apart from "the agent followed the memory file". This module makes each
  * substantive user turn citable:
  *
- *   - the first user turn's authoritative envelope is the task span (`TASK-1`)
- *   - each later substantive user turn is a steering span (`STEER-<turn>`)
+ *   - the first user turn with a non-empty envelope is the task span (`TASK-1`)
+ *   - each later user turn with a non-empty envelope is a steering span (`STEER-<turn>`)
  *   - every span carries source kind, turn, an authority tier distinct from project
  *     memory (`direct-task` / `direct-steering`), and a lifetime running from its turn
  *     onward
@@ -33,9 +33,6 @@
 export const TASK_ID = "TASK-1";
 export const TASK_AUTHORITY = "direct-task";
 export const STEERING_AUTHORITY = "direct-steering";
-
-/** Envelopes shorter than this carry no judgable instruction (acks, greetings). */
-export const MIN_ENVELOPE_WORDS = 3;
 
 const FENCE = /^\s*(```|~~~)/;
 const QUOTE = /^\s*>/;
@@ -73,12 +70,8 @@ export function carveEnvelope(text) {
   return kept.join("\n").trim();
 }
 
-function envelopeWords(envelope) {
-  return envelope.split(/\s+/).filter(Boolean).length;
-}
-
 /**
- * Index the substantive user turns of one session. `turns` are the distilled message
+ * Index the user turns of one session that carry an authoritative envelope. `turns` are the distilled message
  * turns (`{ turn, role, text }`) in trace order, so ids stay stable across runs of the
  * same transcript and always point at text the model was actually sent.
  */
@@ -87,7 +80,7 @@ export function extractDirectives(turns) {
   let seenFirstUser = false;
   for (const entry of Array.isArray(turns) ? turns : []) {
     if (!entry || entry.role !== "user") continue;
-    if (envelopeWords(carveEnvelope(entry.text)) < MIN_ENVELOPE_WORDS) continue;
+    if (!carveEnvelope(entry.text)) continue;
     const span = !seenFirstUser
       ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
       : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
