@@ -132,6 +132,9 @@ export function distill(events, meta, options = {}) {
         role: event.role,
         text,
         envelope: event.role === "user" ? carveEnvelope(redacted) : "",
+        // The envelope is carved pre-clamp, so a clamped turn's instruction may be absent
+        // from what the model reads; the index must not point at it.
+        clamped: text !== redacted.trim(),
         // Set once the trace cap is known, below.
         elided: false,
       });

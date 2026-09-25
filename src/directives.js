@@ -24,7 +24,7 @@
  * trace the analysis model reads. Each turn carries the envelope `distill` carved from
  * its full pre-clamp text, so a closing fence lost to message clamping cannot demote an
  * instruction to a paste. The prompt index renders spans by reference (id plus a
- * `see turn N` pointer, or a note that the turn was elided from the trace), never by
+ * `see turn N` pointer, or a note that the turn was elided or clamped out of the trace), never by
  * duplicating turn text: task and steering text is private by default, and only ids plus
  * metadata (`directives` on the evidence record) ever persist.
  *
@@ -101,9 +101,9 @@ export function carveEnvelope(text) {
 
 /**
  * Index the user turns of one session that carry an authoritative envelope. `turns` are
- * the distilled message turns (`{ turn, role, envelope, elided }`) in trace order, so ids
- * stay stable across runs of the same transcript and each span knows whether its turn
- * survived into the trace.
+ * the distilled message turns (`{ turn, role, envelope, elided, clamped }`) in trace order,
+ * so ids stay stable across runs of the same transcript and each span knows whether its
+ * turn text survived into the trace.
  */
 export function extractDirectives(turns) {
   const spans = [];
@@ -115,7 +115,12 @@ export function extractDirectives(turns) {
       ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
       : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
     seenFirstUser = true;
-    spans.push({ ...span, elided: entry.elided === true, lifetime: { fromTurn: entry.turn, toTurn: null } });
+    spans.push({
+      ...span,
+      elided: entry.elided === true,
+      clamped: entry.clamped === true,
+      lifetime: { fromTurn: entry.turn, toTurn: null },
+    });
   }
   return spans;
 }
@@ -133,8 +138,8 @@ export function directiveMetadata(spans) {
 
 /**
  * The analysis-prompt index. By reference only: each entry names the turn whose text is
- * already in the trace, or says the turn was elided from it, so no user-turn text is
- * duplicated into the prompt.
+ * already in the trace, or says the turn's text was elided or clamped out of it, so no
+ * user-turn text is duplicated into the prompt.
  */
 export function renderDirectiveIndex(spans) {
   const list = Array.isArray(spans) ? spans : [];
@@ -146,7 +151,9 @@ export function renderDirectiveIndex(spans) {
         `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+ - ` +
         (span.elided
           ? `turn ${span.turn} - elided from the trace, open the raw transcript for its text`
-          : `see turn ${span.turn} in the trace`),
+          : span.clamped
+            ? `turn ${span.turn} - clamped from the trace, open the raw transcript for its text`
+            : `see turn ${span.turn} in the trace`),
     )
     .join("\n");
 }
