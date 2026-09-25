@@ -43,9 +43,16 @@ test("only the authoritative envelope becomes instruction text", () => {
 
 test("a nested inner fence stays inside the paste; the outer fence closes it", () => {
   const envelope = carveEnvelope(
-    ["Update the README:", "````md", "# doc", "```bash", "rm -rf build", "```", "````", "Keep the examples short."].join(
-      "\n",
-    ),
+    [
+      "Update the README:",
+      "````md",
+      "# doc",
+      "```bash",
+      "rm -rf build",
+      "```",
+      "````",
+      "Keep the examples short.",
+    ].join("\n"),
   );
   assert.ok(!envelope.includes("rm -rf build"), "pasted command must not be authority");
   assert.ok(!envelope.includes("# doc"), "pasted doc body must not be authority");
@@ -127,10 +134,7 @@ test("the index renders by reference and never repeats turn text", () => {
   assert.match(section, /see turn 1 in the trace/);
   assert.match(section, /lifetime turns 1\+/);
   for (const entry of turns.filter((candidate) => candidate.role === "user")) {
-    assert.ok(
-      !section.includes(carveEnvelope(entry.text)),
-      `turn ${entry.turn} text must not be duplicated`,
-    );
+    assert.ok(!section.includes(carveEnvelope(entry.text)), `turn ${entry.turn} text must not be duplicated`);
   }
   assert.ok(trace.includes("Migrate the auth module"), "the trace itself still carries the text");
 });
