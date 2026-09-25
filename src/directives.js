@@ -34,7 +34,7 @@ export const TASK_ID = "TASK-1";
 export const TASK_AUTHORITY = "direct-task";
 export const STEERING_AUTHORITY = "direct-steering";
 
-const FENCE = /^\s*(```|~~~)/;
+const FENCE = /^\s*(`{3,}|~{3,})([^\n]*)$/;
 const QUOTE = /^\s*>/;
 
 /** A span id is stable by construction: kind plus the distilled turn it points at. */
@@ -53,16 +53,30 @@ function steeringId(turn) {
  */
 export function carveEnvelope(text) {
   const kept = [];
-  let inFence = false;
+  let opener = null;
 
   for (const line of String(text ?? "").split("\n")) {
-    if (FENCE.test(line)) {
-      inFence = !inFence;
+    const fence = FENCE.exec(line);
+    if (opener) {
+      // CommonMark: only a fence of the opener's character, at least as long, with
+      // nothing but whitespace after it, closes the block. A shorter or different
+      // inner fence is part of the paste.
+      if (
+        fence &&
+        fence[1][0] === opener.char &&
+        fence[1].length >= opener.length &&
+        fence[2].trim() === ""
+      ) {
+        opener = null;
+      }
+      // An unclosed fence still withholds the rest: a pasted log without a closing
+      // marker is still a paste, not an instruction.
       continue;
     }
-    // An unclosed fence still withholds the rest: a pasted log without a closing
-    // marker is still a paste, not an instruction.
-    if (inFence) continue;
+    if (fence) {
+      opener = { char: fence[1][0], length: fence[1].length };
+      continue;
+    }
     if (QUOTE.test(line)) continue;
     kept.push(line);
   }
