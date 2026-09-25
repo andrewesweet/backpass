@@ -21,10 +21,12 @@
  * untrusted evidence. Assistant messages and tool results never become spans.
  *
  * Spans are extracted from the distilled message turns, so turn numbers match the
- * trace the analysis model reads. The prompt index renders them by reference (id plus
- * a `see turn N` pointer), never by duplicating turn text: task and steering text is
- * private by default, and only ids plus metadata (`directives` on the evidence
- * record) ever persist - envelope text never leaves the in-memory prompt.
+ * trace the analysis model reads. Each turn carries the envelope `distill` carved from
+ * its full pre-clamp text, so a closing fence lost to message clamping cannot demote an
+ * instruction to a paste. The prompt index renders spans by reference (id plus a
+ * `see turn N` pointer, or a note that the turn was elided from the trace), never by
+ * duplicating turn text: task and steering text is private by default, and only ids plus
+ * metadata (`directives` on the evidence record) ever persist.
  *
  * A span is session authority, never durable project memory: a mistake only a direct
  * instruction covered is still a gap, because the next session starts without it.
@@ -34,8 +36,9 @@ export const TASK_ID = "TASK-1";
 export const TASK_AUTHORITY = "direct-task";
 export const STEERING_AUTHORITY = "direct-steering";
 
-const FENCE = /^\s*(`{3,}|~{3,})([^\n]*)$/;
-const QUOTE = /^\s*>/;
+// CommonMark: four or more leading spaces is indented code, not a fence or a quote.
+const FENCE = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;
+const QUOTE = /^ {0,3}>/;
 
 /** A span id is stable by construction: kind plus the distilled turn it points at. */
 export function isDirectiveId(id) {
@@ -82,21 +85,22 @@ export function carveEnvelope(text) {
 }
 
 /**
- * Index the user turns of one session that carry an authoritative envelope. `turns` are the distilled message
- * turns (`{ turn, role, text }`) in trace order, so ids stay stable across runs of the
- * same transcript and always point at text the model was actually sent.
+ * Index the user turns of one session that carry an authoritative envelope. `turns` are
+ * the distilled message turns (`{ turn, role, envelope, elided }`) in trace order, so ids
+ * stay stable across runs of the same transcript and each span knows whether its turn
+ * survived into the trace.
  */
 export function extractDirectives(turns) {
   const spans = [];
   let seenFirstUser = false;
   for (const entry of Array.isArray(turns) ? turns : []) {
     if (!entry || entry.role !== "user") continue;
-    if (!carveEnvelope(entry.text)) continue;
+    if (!entry.envelope) continue;
     const span = !seenFirstUser
       ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
       : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
     seenFirstUser = true;
-    spans.push({ ...span, lifetime: { fromTurn: entry.turn, toTurn: null } });
+    spans.push({ ...span, elided: entry.elided === true, lifetime: { fromTurn: entry.turn, toTurn: null } });
   }
   return spans;
 }
@@ -113,22 +117,21 @@ export function directiveMetadata(spans) {
 }
 
 /**
- * The analysis-prompt index. By reference only: each entry names the turn whose text
- * is already in the trace, so no user-turn text is duplicated into the prompt.
+ * The analysis-prompt index. By reference only: each entry names the turn whose text is
+ * already in the trace, or says the turn was elided from it, so no user-turn text is
+ * duplicated into the prompt.
  */
-export function renderDirectiveIndex(spans, { elided = false } = {}) {
+export function renderDirectiveIndex(spans) {
   const list = Array.isArray(spans) ? spans : [];
   if (!list.length) return "(none - no substantive user instruction found in the trace)";
-  const lines = list.map(
-    (span) =>
-      `[${span.id}] ${span.kind} · turn ${span.turn} · authority ${span.authority} · ` +
-      `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+ - see turn ${span.turn} in the trace`,
-  );
-  if (elided) {
-    lines.push(
-      "The trace middle was elided; a cited turn may sit in the elided span - " +
-        "open the raw transcript when a claim needs its text.",
-    );
-  }
-  return lines.join("\n");
+  return list
+    .map(
+      (span) =>
+        `[${span.id}] ${span.kind} · turn ${span.turn} · authority ${span.authority} · ` +
+        `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+ - ` +
+        (span.elided
+          ? `turn ${span.turn} - elided from the trace, open the raw transcript for its text`
+          : `see turn ${span.turn} in the trace`),
+    )
+    .join("\n");
 }

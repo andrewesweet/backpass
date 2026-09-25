@@ -76,6 +76,44 @@ test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
 
+test("an indented fence line inside a paste neither opens nor closes", () => {
+  const envelope = carveEnvelope(
+    [
+      "Fix the docs:",
+      "```md",
+      "Example:",
+      "    ```bash",
+      "    npm ci",
+      "    ```",
+      "End.",
+      "```",
+      "Use pnpm, not npm.",
+    ].join("\n"),
+  );
+  assert.ok(!envelope.includes("npm ci"), "the indented block stays inside the paste");
+  assert.ok(!envelope.includes("End."), "the paste remainder never re-enters the envelope");
+  assert.match(envelope, /Fix the docs:/);
+  assert.match(envelope, /Use pnpm, not npm\./);
+});
+
+test("an over-limit turn keeps its instruction when the closing fence falls in the clamped region", () => {
+  const log = "2026-01-01T00:00:00Z some CI log line\n".repeat(200);
+  const { turns } = distill(
+    [
+      { kind: "message", role: "user", text: `\`\`\`\n${log}\`\`\`\n\nKeep the public API stable.` },
+      { kind: "message", role: "assistant", text: "Will do." },
+    ],
+    META,
+  );
+  assert.ok(turns[0].text.includes("chars elided"), "the turn text is clamped");
+  const spans = extractDirectives(turns);
+  assert.deepEqual(
+    spans.map((span) => [span.id, span.turn]),
+    [[TASK_ID, 1]],
+  );
+  assert.equal(turns[0].envelope, "Keep the public API stable.");
+});
+
 test("the first user turn is the task, later ones are steering; assistant and tool turns never index", () => {
   const { turns } = distill(fixtureEvents(), META);
   const spans = extractDirectives(turns);
@@ -96,11 +134,15 @@ test("the first user turn is the task, later ones are steering; assistant and to
 });
 
 test("a short imperative is addressable: length never decides which turn is the task", () => {
-  const spans = extractDirectives([
-    { turn: 1, role: "user", text: "ship it" },
-    { turn: 2, role: "user", text: "Add tests." },
-    { turn: 3, role: "user", text: "Use pnpm, never npm." },
-  ]);
+  const { turns } = distill(
+    [
+      { kind: "message", role: "user", text: "ship it" },
+      { kind: "message", role: "user", text: "Add tests." },
+      { kind: "message", role: "user", text: "Use pnpm, never npm." },
+    ],
+    META,
+  );
+  const spans = extractDirectives(turns);
   assert.deepEqual(
     spans.map((span) => [span.id, span.kind, span.turn]),
     [
@@ -118,10 +160,14 @@ test("every lifetime runs from its own turn onward; later steering never closes 
 });
 
 test("a message that is only quotes and pastes yields no span", () => {
-  const spans = extractDirectives([
-    { turn: 1, role: "user", text: "> quoted transcript line\n\n```\npasted output\n```" },
-    { turn: 2, role: "assistant", text: "Noted." },
-  ]);
+  const { turns } = distill(
+    [
+      { kind: "message", role: "user", text: "> quoted transcript line\n\n```\npasted output\n```" },
+      { kind: "message", role: "assistant", text: "Noted." },
+    ],
+    META,
+  );
+  const spans = extractDirectives(turns);
   assert.deepEqual(spans, []);
   assert.match(renderDirectiveIndex(spans), /\(none/);
 });
@@ -134,9 +180,33 @@ test("the index renders by reference and never repeats turn text", () => {
   assert.match(section, /see turn 1 in the trace/);
   assert.match(section, /lifetime turns 1\+/);
   for (const entry of turns.filter((candidate) => candidate.role === "user")) {
-    assert.ok(!section.includes(carveEnvelope(entry.text)), `turn ${entry.turn} text must not be duplicated`);
+    assert.ok(!section.includes(entry.envelope), `turn ${entry.turn} text must not be duplicated`);
   }
   assert.ok(trace.includes("Migrate the auth module"), "the trace itself still carries the text");
+});
+
+test("an indexed turn the trace elided is marked elided, not pointed at", () => {
+  const filler = (n) => `${"pipeline detail ".repeat(400)} step ${n}`;
+  const events = [
+    { kind: "message", role: "user", text: "Migrate the auth module." },
+    ...Array.from({ length: 30 }, (_, i) => [
+      { kind: "message", role: "assistant", text: filler(i) },
+      { kind: "message", role: "user", text: `Also handle case ${i}.` },
+    ]).flat(),
+    { kind: "message", role: "user", text: "Keep the public API stable." },
+  ];
+  const distilled = distill(events, META);
+  assert.equal(distilled.stats.elided, true);
+  const spans = extractDirectives(distilled.turns);
+  const elidedSpans = spans.filter((span) => span.elided);
+  assert.ok(elidedSpans.length, "the capped middle holds at least one indexed user turn");
+  const section = renderDirectiveIndex(spans);
+  for (const span of elidedSpans) {
+    assert.ok(section.includes(`turn ${span.turn} - elided from the trace`), `span ${span.id} must be marked elided`);
+    assert.ok(!section.includes(`see turn ${span.turn} in the trace`));
+  }
+  const kept = spans.find((span) => !span.elided);
+  assert.ok(section.includes(`see turn ${kept.turn} in the trace`), "a surviving turn still points at the trace");
 });
 
 test("sanitizeEvidence accepts issued directive ids and drops the rest", () => {
@@ -205,7 +275,7 @@ test("the directive index costs a fraction of duplicating the turns it points at
       harness: candidate.path.includes("pi-") ? "pi" : "claude",
     });
     const spans = extractDirectives(distilled.turns);
-    const section = renderDirectiveIndex(spans, { elided: distilled.stats.elided });
+    const section = renderDirectiveIndex(spans);
     const sectionTokens = estimateTokens(section);
     // By-reference cost scales with the span count, never the turn length: one
     // bounded entry per span, whatever the turn says.

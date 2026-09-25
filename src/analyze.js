@@ -194,7 +194,7 @@ async function analyzeOne({
     MEMORY_PATH: memoryFile.path,
     INSTRUCTION_INDEX: renderInstructionIndex(memoryFile),
     SKILLS: skillIndex,
-    DIRECTIVES: renderDirectiveIndex(directives, { elided: distilled.stats.elided }),
+    DIRECTIVES: renderDirectiveIndex(directives),
     OPEN_GAPS: openGapIndex,
     TRACE: distilled.trace,
   });
