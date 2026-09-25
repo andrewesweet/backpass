@@ -132,6 +132,8 @@ export function distill(events, meta, options = {}) {
         role: event.role,
         text,
         envelope: event.role === "user" ? carveEnvelope(redacted) : "",
+        // Set once the trace cap is known, below.
+        elided: false,
       });
       const from = bodyChars;
       push(`### turn ${turn} · ${event.role}`);
