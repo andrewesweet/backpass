@@ -209,6 +209,41 @@ test("an indexed turn the trace elided is marked elided, not pointed at", () => 
   assert.ok(section.includes(`see turn ${kept.turn} in the trace`), "a surviving turn still points at the trace");
 });
 
+test("a fence indented inside a list item still opens a paste", () => {
+  const envelope = carveEnvelope(
+    ["Steps:", "10. Run:", "", "    ```bash", "    rm -rf dist", "    ```", "", "Then deploy."].join("\n"),
+  );
+  assert.ok(!envelope.includes("rm -rf dist"), "a list-item code block is still a paste");
+  assert.match(envelope, /Steps:/);
+  assert.match(envelope, /Then deploy\./);
+});
+
+test("a turn the trace only half kept is marked elided, never pointed at", () => {
+  const events = Array.from({ length: 40 }, (_, i) => ({
+    kind: "message",
+    role: i % 2 === 0 ? "user" : "assistant",
+    text: `${i % 2 === 0 ? "Also handle case" : "Handled case"} ${i}. ${"pipeline detail ".repeat(6)}marker-${i}`,
+  }));
+  const distilled = distill(events, META, { maxTraceTokens: 1000 });
+  assert.equal(distilled.stats.elided, true);
+  const spans = extractDirectives(distilled.turns);
+  const section = renderDirectiveIndex(spans);
+  let halfKept = 0;
+  for (const span of spans) {
+    const entry = distilled.turns.find((candidate) => candidate.turn === span.turn);
+    const whole = distilled.trace.includes(entry.text);
+    const partial = !whole && distilled.trace.includes(entry.text.slice(0, 20));
+    if (partial) halfKept += 1;
+    if (!span.elided) {
+      assert.ok(whole, `span ${span.id} is pointed at but turn ${span.turn} is not wholly in the trace`);
+      assert.ok(section.includes(`see turn ${span.turn} in the trace`));
+    } else {
+      assert.ok(section.includes(`turn ${span.turn} - elided from the trace`));
+    }
+  }
+  assert.ok(halfKept >= 1, "the head or tail cut must straddle at least one indexed turn");
+});
+
 test("sanitizeEvidence accepts issued directive ids and drops the rest", () => {
   const memoryFile = { units: parseMemoryUnits("# T\n\n- First rule\n") };
   const clean = sanitizeEvidence(
