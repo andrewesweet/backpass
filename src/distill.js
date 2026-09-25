@@ -112,7 +112,7 @@ export function distill(events, meta, options = {}) {
   // envelope is carved from the full pre-clamp text, so a closing fence that the clamp
   // elides cannot turn an instruction into a paste.
   const turns = [];
-  const turnOffsets = [];
+  const turnSpans = [];
   let userTurns = 0;
   let assistantTurns = 0;
   let toolCalls = 0;
@@ -133,9 +133,10 @@ export function distill(events, meta, options = {}) {
         text,
         envelope: event.role === "user" ? carveEnvelope(redacted) : "",
       });
-      turnOffsets.push(bodyChars);
+      const from = bodyChars;
       push(`### turn ${turn} · ${event.role}`);
       push(text);
+      turnSpans.push([from, bodyChars - 1]);
       push("");
     } else if (event.kind === "tool") {
       toolCalls += 1;
@@ -171,8 +172,8 @@ export function distill(events, meta, options = {}) {
   const rawBody = lines.join("\n").trim();
   const { body, elided, kept } = capTrace(rawBody, maxTraceTokens);
   turns.forEach((entry, index) => {
-    const at = turnOffsets[index];
-    entry.elided = !kept.some(([from, to]) => at >= from && at < to);
+    const [from, to] = turnSpans[index];
+    entry.elided = !kept.some(([keptFrom, keptTo]) => from >= keptFrom && to <= keptTo);
   });
   const trace = `${header}\n${body}\n${footer}\n`;
 
