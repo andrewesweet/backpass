@@ -386,9 +386,9 @@ so those instructions are addressable too. The user's own task message (`TASK-1`
 later steering turn (`STEER-<turn>`) become citable instruction sources with their own
 authority, alongside the memory-file ids. Only the authoritative part of a user turn counts:
 fenced blocks and quoted lines are pasted evidence, never instructions, and assistant or tool
-text never becomes one. The index points at a turn already in the trace instead of repeating
-its text - or says that turn was elided from the trace, when the session was long enough to
-be capped - and only the ids and their metadata persist in the evidence record. Direct
+text never becomes one. The index references a trace turn without repeating its text.
+If a turn is elided by session capping or clamped by message truncation, the index marks it
+and points to the raw transcript. Only the ids and their metadata persist in the evidence record. Direct
 instructions are session authority, not durable memory, so a mistake covered only by one is
 still reported as a gap - the user had to say it in this session, and the next session starts
 without it - and their citations do not score a memory-file instruction.
