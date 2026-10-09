@@ -18,7 +18,7 @@ import { runCapture } from "./subprocess.js";
  * `provider/id` wins; a collision is ranked by auth class (subscription over API key)
  * from `src/provider-auth.js`. An unrankable collision is a loud non-match that names
  * the ids - never an arbitrary pick, and never silent fallthrough disguised as
- * "model not advertised".
+ * "model not available".
  *
  * All model invocation still goes through `src/acpx.js`. The one documented exception
  * is `NATIVE_PROBES` below: the claude adapter creates sessions happily while logged
@@ -50,7 +50,7 @@ const PROVIDER_AUTH_SENSITIVE_AGENTS = new Set(["pi", "opencode"]);
 export const VERDICT_LABELS = {
   ok: "ok",
   unauthenticated: "not logged in",
-  "model-unavailable": "model not advertised",
+  "model-unavailable": "model not available",
   unreachable: "not installed / not spawnable",
   timeout: "probe timed out",
   "empty-output": "returned no output",
@@ -509,7 +509,9 @@ export class AgentResolver {
 
   /**
    * Run `fn(pick)` for a role, falling through the ladder on classifiable failures.
-   * Unclassifiable errors (a timeout on real work, garbage output) propagate unchanged.
+   * Unclassifiable errors (garbage output) propagate unchanged. A timeout on real work propagates
+   * unchanged for pinned and auto-picked agents alike: it is never classified (whatever its stderr
+   * says), demoted, or retried.
    */
   async withFallthrough(role, fn) {
     for (;;) {
@@ -518,6 +520,7 @@ export class AgentResolver {
         return await fn(pick);
       } catch (err) {
         const isAcpxError = err instanceof AcpxError;
+        if (isAcpxError && err.timedOut) throw err;
         const verdict = isAcpxError ? classifyAcpxFailure(err) : null;
         if (isAcpxError && pick.pinned) throw pinnedFailureError(role, pick, verdict, err);
         if (!verdict) throw err;

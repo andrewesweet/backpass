@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { extractJson, runModelCall, usageRecord } from "./acpx.js";
 import { directiveMetadata, extractDirectives, renderDirectiveIndex } from "./directives.js";
 import { distill } from "./distill.js";
 import { classifyInteraction } from "./interaction.js";
-import { readTranscript } from "./discovery/index.js";
+import { getAdapter, readTranscript } from "./discovery/index.js";
 import { instructionUnits, renderInstructionIndex } from "./memory.js";
 import { renderSkillIndexForAnalysis } from "./skills.js";
 import { renderPrompt } from "./prompts.js";
@@ -30,6 +31,95 @@ const MIN_TOOL_CALLS = 3;
 
 let callCounter = 0;
 const seenNotes = new Set();
+const activeRawFiles = new Set();
+
+/**
+ * A raw file is leased rather than owned by a PID: while its call runs, this process renews
+ * the file's modification time every minute. Reclaim only after 24 hours without renewal,
+ * allowing hours of clock skew between hosts sharing state while making SIGKILL leftovers
+ * eligible for cleanup after a day. PIDs cannot prove liveness across hosts or namespaces.
+ */
+const RAW_LEASE_RENEW_MS = 60_000;
+const RAW_LEASE_MS = 24 * 60 * 60_000;
+const RAW_FILE_NAME = /^[0-9a-f-]{36}\.jsonl$/;
+let leaseTimer = null;
+
+process.once("exit", () => {
+  for (const file of activeRawFiles) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch (err) {
+      warn(`could not remove raw transcript ${file}: ${err.message}`);
+    }
+  }
+});
+
+function renewRawLeases() {
+  const now = new Date();
+  for (const file of activeRawFiles) {
+    try {
+      fs.utimesSync(file, now, now);
+    } catch {
+      // Not written yet, or already removed; either way there is no lease to renew.
+    }
+  }
+}
+
+function holdRawFile(file) {
+  activeRawFiles.add(file);
+  if (!leaseTimer) {
+    leaseTimer = setInterval(renewRawLeases, RAW_LEASE_RENEW_MS);
+    leaseTimer.unref();
+  }
+}
+
+function releaseRawFile(file) {
+  activeRawFiles.delete(file);
+  if (!activeRawFiles.size && leaseTimer) {
+    clearInterval(leaseTimer);
+    leaseTimer = null;
+  }
+  fs.rmSync(file, { force: true });
+}
+
+/** Housekeeping is best-effort: skip an inaccessible directory with one warning. */
+function rawCleanupEntries(dir) {
+  try {
+    const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+    if (!stat) return []; // Optional directory has not been created.
+    if (!stat.isDirectory()) throw new Error("not a directory");
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    warn(`could not reclaim raw transcripts in ${dir}: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Removes raw files whose lease expired - what an uncatchable exit such as SIGKILL leaves
+ * behind - from the state root and its nested state directories.
+ */
+export function reclaimExpiredRawFiles(stateRoot) {
+  if (!stateRoot) return;
+  const now = Date.now();
+  const roots = [stateRoot];
+  const nested = path.join(stateRoot, "nested");
+  for (const entry of rawCleanupEntries(nested)) {
+    if (entry.isDirectory()) roots.push(path.join(nested, entry.name));
+  }
+  for (const root of roots) {
+    const dir = path.resolve(root, "raw");
+    for (const entry of rawCleanupEntries(dir)) {
+      const file = path.join(dir, entry.name);
+      if (!entry.isFile() || !RAW_FILE_NAME.test(entry.name)) continue;
+      try {
+        if (now - fs.statSync(file).mtimeMs > RAW_LEASE_MS) fs.rmSync(file, { force: true });
+      } catch {
+        // Removed by its own run in the meantime.
+      }
+    }
+  }
+}
 
 /** The same adapter limitation would repeat once per transcript; say it once per run. */
 function noteOnce(note) {
@@ -147,6 +237,19 @@ function promptPathFor(state, transcript) {
   return path.join(state.applyDir, "..", "prompts", `${safeFileName(transcriptIdentity(transcript))}.md`);
 }
 
+/**
+ * The raw-transcript escape hatch must open one session, not expose a shared database
+ * or require queries against an undocumented schema. File-backed sessions and remote
+ * cached copies already have session-specific paths; local SQLite sessions need a
+ * temporary export here. See README.md's Distill section for its lifecycle.
+ *
+ * @returns {string | null}
+ */
+function sessionRawPath(transcript, state) {
+  if (transcript.host || !getAdapter(transcript.harness)?.sqliteBacked || !state?.root) return null;
+  return path.resolve(state.root, "raw", `${randomUUID()}.jsonl`);
+}
+
 async function analyzeOne({
   transcript,
   memoryFile,
@@ -156,12 +259,14 @@ async function analyzeOne({
   slot = 0,
   openGapIndex = "(none yet)",
   skillIndex = "(this repo has no skills)",
+  alsoLoaded = "",
 }) {
   const raw = await readTranscript(transcript);
+  const rawFile = sessionRawPath(transcript, config.state);
   const distilled = distill(raw.events, {
     ...transcript,
     model: raw.model,
-    rawPath: raw.rawPath,
+    rawPath: rawFile ?? raw.rawPath,
   });
 
   emitProgress("analyze:lane", {
@@ -189,78 +294,107 @@ async function analyzeOne({
     };
   }
 
-  const directives = extractDirectives(distilled.turns);
-  const prompt = renderPrompt("analysis", {
-    MEMORY_PATH: memoryFile.path,
-    INSTRUCTION_INDEX: renderInstructionIndex(memoryFile),
-    SKILLS: skillIndex,
-    DIRECTIVES: renderDirectiveIndex(directives),
-    OPEN_GAPS: openGapIndex,
-    TRACE: distilled.trace,
-  });
+  try {
+    if (rawFile) {
+      fs.mkdirSync(path.dirname(rawFile), { recursive: true, mode: 0o700 });
+      const lines = [
+        JSON.stringify({ harness: transcript.harness, session: transcript.nativeId, model: raw.model || null }),
+        ...raw.events.map((event) => JSON.stringify(event)),
+      ];
+      holdRawFile(rawFile);
+      fs.writeFileSync(rawFile, `${lines.join("\n")}\n`, { mode: 0o600, flag: "wx" });
+    }
 
-  const promptFile = promptPathFor(config.state, transcript);
-  fs.mkdirSync(path.dirname(promptFile), { recursive: true });
-  fs.writeFileSync(promptFile, prompt);
-
-  let ranWith = null;
-  const result = await config.agents.withFallthrough("analysis", async (pick) => {
-    ranWith = pick.agent;
-    const call = {
-      agent: pick.agent,
-      model: pick.model,
-      promptFile,
-      cwd: modelCwd || repo.root,
-      timeoutSeconds: config.timeoutSeconds,
-      promptRetries: config.promptRetries,
-    };
-    // Route effortful calls through a fresh per-transcript session so each harness's
-    // invocation-scoped overlay or safe fallback is applied; otherwise one-shot is cheaper.
-    return runModelCall(call, pick, {
-      sessionName: () => `backpass-analysis-${process.pid}-${slot}-${++callCounter}`,
+    const directives = extractDirectives(distilled.turns);
+    const prompt = renderPrompt("analysis", {
+      MEMORY_PATH: memoryFile.path,
+      INSTRUCTION_INDEX: renderInstructionIndex(memoryFile),
+      ALSO_LOADED: alsoLoaded,
+      SKILLS: skillIndex,
+      DIRECTIVES: renderDirectiveIndex(directives),
+      OPEN_GAPS: openGapIndex,
+      TRACE: distilled.trace,
     });
-  });
-  for (const note of result.notes || []) noteOnce(note);
 
-  const parsed = extractJson(result.text);
-  if (!parsed) {
-    throw new Error("analysis returned no parseable JSON");
+    const promptFile = promptPathFor(config.state, transcript);
+    fs.mkdirSync(path.dirname(promptFile), { recursive: true });
+    fs.writeFileSync(promptFile, prompt);
+
+    let ranWith = null;
+    const result = await config.agents.withFallthrough("analysis", async (pick) => {
+      ranWith = pick.agent;
+      const call = {
+        agent: pick.agent,
+        model: pick.model,
+        promptFile,
+        cwd: modelCwd || repo.root,
+        timeoutSeconds: config.timeoutSeconds,
+        promptRetries: config.promptRetries,
+      };
+      // Route effortful calls through a fresh per-transcript session so each harness's
+      // invocation-scoped overlay or safe fallback is applied; otherwise one-shot is cheaper.
+      return runModelCall(call, pick, {
+        sessionName: () => `backpass-analysis-${process.pid}-${slot}-${++callCounter}`,
+      });
+    });
+    for (const note of result.notes || []) noteOnce(note);
+
+    const parsed = extractJson(result.text);
+    if (!parsed) {
+      throw new Error("analysis returned no parseable JSON");
+    }
+
+    const evidence = sanitizeEvidence(
+      parsed,
+      memoryFile,
+      distilled.trace,
+      directives.map((span) => span.id),
+    );
+    return {
+      status: "ok",
+      // The record carries this session's directive span metadata - ids, turn, authority
+      // and lifetime, never envelope text - so a cited TASK-1 / STEER-N id stays
+      // resolvable in persisted evidence (see `src/directives.js`).
+      evidence: { ...evidence, directives: directiveMetadata(directives) },
+      usage: usageRecord(ranWith, result),
+      distilled,
+    };
+  } finally {
+    if (rawFile) releaseRawFile(rawFile);
   }
-
-  const evidence = sanitizeEvidence(
-    parsed,
-    memoryFile,
-    distilled.trace,
-    directives.map((span) => span.id),
-  );
-  return {
-    status: "ok",
-    // The record carries this session's directive span metadata - ids, turn, authority
-    // and lifetime, never envelope text - so a cited TASK-1 / STEER-N id stays
-    // resolvable in persisted evidence (see `src/directives.js`).
-    evidence: { ...evidence, directives: directiveMetadata(directives) },
-    usage: usageRecord(ranWith, result),
-    distilled,
-  };
 }
 
 /**
  * Bounded-concurrency worker pool - the design's `--jobs N` fan-out.
  * The worker also receives its runner slot so the progress view can show one
  * lane per job.
+ *
+ * A worker error is fatal to the run (per-transcript failures never reach here), so the
+ * first one stops the pool from handing out more items: without that, the other runners
+ * kept taking transcripts and making model calls after the run had already reported the
+ * failure. Calls already in flight finish and keep their results; the first error is
+ * rethrown once every runner has stopped, so nothing is still running when it surfaces.
  */
 async function pool(items, limit, worker) {
   const results = new Array(items.length);
   let cursor = 0;
+  /** @type {{ err: unknown } | null} */
+  let failure = null;
   const runners = Array.from({ length: Math.min(limit, items.length) }, async (_, slot) => {
-    for (;;) {
+    while (!failure) {
       const index = cursor;
       cursor += 1;
       if (index >= items.length) return;
-      results[index] = await worker(items[index], index, slot);
+      try {
+        results[index] = await worker(items[index], index, slot);
+      } catch (err) {
+        failure ??= { err };
+        return;
+      }
     }
   });
   await Promise.all(runners);
+  if (failure) throw failure.err;
   return results;
 }
 
@@ -274,6 +408,7 @@ export async function analyzeTranscripts({
   memoryHash,
   force = false,
   prefetch = null,
+  alsoLoaded = "",
 }) {
   const state = config.state;
   const pending = [];
@@ -401,6 +536,7 @@ export async function analyzeTranscripts({
         slot,
         openGapIndex,
         skillIndex,
+        alsoLoaded,
       });
       if (result.status === "skipped") {
         summary.skipped += 1;
