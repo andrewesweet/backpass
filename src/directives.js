@@ -39,7 +39,7 @@ export const STEERING_AUTHORITY = "direct-steering";
 const FENCE = /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/;
 const QUOTE = /^\s*>/;
 
-// CommonMark counts a tab as four columns, and fence indentation is relative: an opener
+// Tabs advance to the next four-column stop. Fence indentation is relative: an opener
 // may sit at any indentation (a list-item code block is still a fence), while its closer
 // may be indented at most three columns further.
 function indentColumns(prefix) {
