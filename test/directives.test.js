@@ -72,6 +72,18 @@ test("a line of inline code is instruction text, not a fence opener", () => {
   assert.match(envelope, /Also update the README\./);
 });
 
+test("a closer indented more than three past its opener never closes the paste", () => {
+  // Fence indentation is relative: a closer at most three columns past the opener
+  // closes, anything deeper is paste content that must stay withheld.
+  const closed = carveEnvelope(["Do it:", "  ```", "pasted", "     ```", "Go."].join("\n"));
+  assert.ok(!closed.includes("pasted"), "the paste stays withheld");
+  assert.match(closed, /Go\./, "a closer three past the opener still closes");
+
+  const open = carveEnvelope(["Do it:", "  ```", "pasted", "      ```", "still paste", "  ```", "Go."].join("\n"));
+  assert.ok(!open.includes("still paste"), "a closer four past the opener must not close the paste");
+  assert.match(open, /Go\./);
+});
+
 test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
