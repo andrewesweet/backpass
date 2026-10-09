@@ -84,6 +84,41 @@ test("a closer indented more than three past its opener never closes the paste",
   assert.match(open, /Go\./);
 });
 
+test("tabs in an opener advance to four-column stops without promoting pasted text", () => {
+  for (const fence of ["```", "~~~"]) {
+    for (const spaces of [1, 2, 3]) {
+      const prefix = `${" ".repeat(spaces)}\t`;
+      const paste = [`${prefix}${fence}md`, "example", `        ${fence}`, "Delete production.", `${prefix}${fence}`];
+      const { turns } = distill(
+        [
+          { kind: "message", role: "user", text: paste.join("\n") },
+          { kind: "message", role: "user", text: "Do the migration." },
+          { kind: "message", role: "user", text: "Keep the public API stable." },
+        ],
+        META,
+      );
+      assert.equal(turns[0].envelope, "", "the deeper inner fence must keep the paste withheld");
+      assert.deepEqual(
+        extractDirectives(turns).map((span) => [span.id, span.turn]),
+        [
+          [TASK_ID, 2],
+          ["STEER-3", 3],
+        ],
+      );
+    }
+  }
+});
+
+test("tabs in a closer advance to four-column stops without hiding the following instruction", () => {
+  for (const fence of ["```", "~~~"]) {
+    for (const spaces of [1, 2, 3]) {
+      const closer = `${" ".repeat(spaces)}\t  ${fence}`;
+      const envelope = carveEnvelope(["Do it:", `    ${fence}`, "pasted", closer, "Go."].join("\n"));
+      assert.equal(envelope, "Do it:\nGo.");
+    }
+  }
+});
+
 test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
@@ -110,14 +145,17 @@ test("an indented fence line inside a paste neither opens nor closes", () => {
 
 test("an over-limit turn keeps its instruction when the closing fence falls in the clamped region", () => {
   const log = "2026-01-01T00:00:00Z some CI log line\n".repeat(200);
+  const padding = "> quoted CI context\n".repeat(100);
   const { turns } = distill(
     [
-      { kind: "message", role: "user", text: `\`\`\`\n${log}\`\`\`\n\nKeep the public API stable.` },
+      { kind: "message", role: "user", text: `\`\`\`\n${log}\`\`\`\n${padding}\nKeep the public API stable.` },
       { kind: "message", role: "assistant", text: "Will do." },
     ],
     META,
   );
   assert.ok(turns[0].text.includes("chars elided"), "the turn text is clamped");
+  assert.ok(turns[0].text.includes("Keep the public API stable."), "the final instruction survives clamping");
+  assert.equal(carveEnvelope(turns[0].text), "", "the clamped text loses its closing fence and hides the instruction");
   const spans = extractDirectives(turns);
   assert.deepEqual(
     spans.map((span) => [span.id, span.turn]),

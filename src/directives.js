@@ -44,7 +44,7 @@ const QUOTE = /^\s*>/;
 // may be indented at most three columns further.
 function indentColumns(prefix) {
   let columns = 0;
-  for (const char of prefix) columns += char === "\t" ? 4 : 1;
+  for (const char of prefix) columns += char === "\t" ? 4 - (columns % 4) : 1;
   return columns;
 }
 
