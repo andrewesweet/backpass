@@ -39,9 +39,10 @@ export function getAdapter(harness) {
  * Discovery (design section 2).
  *
  * For file-backed stores the expensive step is reading each transcript's header, so
- * results are memoised in `.backpass/scan-cache.json` keyed by path + mtime + size.
- * Re-scans are then O(new files) - which matters: codex alone had 10,317 rollouts on
- * the machine this was designed against.
+ * results are memoised in `.backpass/scan-cache.json` keyed by path + mtime + size. An
+ * adapter may also export `cacheDependency` (a fingerprint of other files a descriptor
+ * reads, such as OMP ancestor sessions); a mismatch reclassifies the entry. Unchanged
+ * entries avoid reclassification, but dependency fingerprints are checked per candidate.
  *
  * SQLite-backed stores (opencode, hermes, cursor IDE) query session metadata directly,
  * so they skip the file-header cache entirely.
@@ -151,6 +152,7 @@ export async function discoverTranscripts({
       hosts,
       harnesses: selected.filter((h) => getAdapter(h)),
       cutoffMs,
+      includeOmp: config.discovery.includeOmp,
       controlPath: createControlPath(),
     });
     remoteMasters.push(...collected.map((result) => result.master).filter(Boolean));
@@ -254,6 +256,19 @@ function remoteTranscripts(result, entry, { scope, repo, config, strict, identit
 function dropCrossHostDuplicates(transcripts) {
   const seen = new Map();
   const drops = new Map();
+  const observerAliases = new Map();
+  const observerCorrespondences = new Map();
+  const canonicalObserver = (identity) => {
+    while (observerAliases.has(identity)) identity = observerAliases.get(identity);
+    return identity;
+  };
+  const aliasObserver = (observer, retainedObserver) => {
+    const canonical = canonicalObserver(observer);
+    const retained = canonicalObserver(retainedObserver);
+    if (canonical !== retained) {
+      observerAliases.set(canonical, retained);
+    }
+  };
   let write = 0;
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.nativeId}`;
@@ -261,13 +276,49 @@ function dropCrossHostDuplicates(transcripts) {
     if (previous && previous.host !== (transcript.host || null)) {
       const host = transcript.host || "local";
       drops.set(host, (drops.get(host) || 0) + 1);
+      if (
+        (transcript.parentSessionId ||
+          (transcript.harness === "pi" && transcript.interactionSignals.source === "subagent")) &&
+        (previous.parentSessionId || (previous.harness === "pi" && previous.interactionSignals.source === "subagent"))
+      ) {
+        aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
+        const observerKey = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+        const retainedObserverKey = `${previous.harness}\n${previous.corroborationNativeId}`;
+        if (!observerCorrespondences.has(observerKey)) observerCorrespondences.set(observerKey, previous);
+        if (!observerCorrespondences.has(retainedObserverKey))
+          observerCorrespondences.set(retainedObserverKey, previous);
+      }
       continue;
     }
-    if (!previous) seen.set(key, { host: transcript.host || null });
+    if (!previous) seen.set(key, transcript);
     transcripts[write] = transcript;
     write += 1;
   }
   transcripts.length = write;
+  const observers = new Map(observerCorrespondences);
+  for (const transcript of transcripts) {
+    const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+    const previous = observers.get(key);
+    if (
+      !previous ||
+      (!observerCorrespondences.has(key) &&
+        previous.host === (transcript.host || null) &&
+        !previous.parentSessionId &&
+        transcript.parentSessionId)
+    ) {
+      observers.set(key, transcript);
+    }
+  }
+  for (const transcript of transcripts) {
+    const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+    const previous = observers.get(key);
+    if (previous.host !== (transcript.host || null) && !observerAliases.has(transcript.corroborationIdentity)) {
+      aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
+    }
+  }
+  for (const transcript of transcripts) {
+    transcript.corroborationIdentity = canonicalObserver(transcript.corroborationIdentity);
+  }
   return drops;
 }
 
@@ -316,8 +367,10 @@ function discoverFiles(
   { repo, config, cutoffMs, strict, stats, cache, markDirty, associateFn, stateDir, userFilter },
 ) {
   const candidates = adapter.enumerate({ cutoffMs, repo, config });
+  const scanContext = adapter.createScanContext?.();
   const out = [];
 
+  const hasCacheDependency = typeof adapter.cacheDependency === "function";
   for (const candidate of candidates) {
     if (cutoffMs && candidate.mtimeMs < cutoffMs) continue;
     stats.scanned += 1;
@@ -334,19 +387,25 @@ function discoverFiles(
 
     const cacheKey = `${adapter.name}:${candidate.key}`;
     const cached = cache.entries[cacheKey];
+    const cacheDependency = hasCacheDependency
+      ? adapter.cacheDependency(candidate, { repo, config, scanContext })
+      : undefined;
     let descriptor;
 
     if (
       cached &&
       cached.mtimeMs === candidate.mtimeMs &&
       cached.bytes === candidate.bytes &&
+      (!hasCacheDependency || cached.cacheDependency === cacheDependency) &&
       hasInteractionSignals(cached.descriptor)
     ) {
       stats.cached += 1;
       descriptor = cached.descriptor;
     } else {
-      descriptor = adapter.classify(candidate, { repo, config }) || null;
-      cache.entries[cacheKey] = { mtimeMs: candidate.mtimeMs, bytes: candidate.bytes, descriptor };
+      descriptor = adapter.classify(candidate, { repo, config, scanContext }) || null;
+      const cacheEntry = { mtimeMs: candidate.mtimeMs, bytes: candidate.bytes, descriptor };
+      if (hasCacheDependency) cacheEntry.cacheDependency = cacheDependency;
+      cache.entries[cacheKey] = cacheEntry;
       markDirty();
     }
 
@@ -408,6 +467,21 @@ function toTranscript(adapter, row, association, id, { host = null, remote = nul
     remote,
   };
   transcript.identity = transcriptIdentity(transcript);
+  if (row.parentSessionId && row.parentSessionPath) {
+    transcript.parentSessionId = row.parentSessionId;
+    transcript.corroborationIdentity = transcriptIdentity({
+      ...transcript,
+      identity: null,
+      nativeId: row.parentSessionId,
+      path: row.parentSessionPath,
+    });
+    transcript.corroborationNativeId = row.parentSessionId;
+    transcript.corroborationStartedAt = row.parentSessionStartedAt ?? transcript.startedAt;
+  } else {
+    transcript.corroborationIdentity = transcript.identity;
+    transcript.corroborationNativeId = id;
+    transcript.corroborationStartedAt = transcript.startedAt;
+  }
   transcript.interaction = classifyInteraction(transcript);
   return transcript;
 }

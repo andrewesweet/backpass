@@ -1,9 +1,15 @@
 import { consolidateGapLedger } from "../consolidate.js";
 import { foldEvidence } from "../fold.js";
-import { ledgerGapObservations, pruneGapLedger, recordGapObservations } from "../gap-ledger.js";
+import {
+  ledgerGapObservations,
+  normalizeGapLedgerSessions,
+  pruneGapLedger,
+  recordGapObservations,
+  resolveGapObservationObserver,
+} from "../gap-ledger.js";
 import { synthesizeProposal } from "../synthesize.js";
 import { ProposalViolation } from "../proposal.js";
-import { formatCorpusMix, INTERACTIVE, NON_INTERACTIVE } from "../interaction.js";
+import { classifyInteraction, formatCorpusMix, INTERACTIVE, NON_INTERACTIVE } from "../interaction.js";
 import { UserError, color, info, json, out, terminalSafe } from "../logger.js";
 import { budgetBar, formatTokens } from "../tokens.js";
 import { emitProgress } from "../progress.js";
@@ -13,7 +19,7 @@ import { printUsage } from "./usage.js";
 import { closeRemoteDiscovery, discoverForRun } from "./scan.js";
 import { capTranscripts } from "../sample.js";
 import { isEvidenceFresh } from "../state.js";
-import { transcriptIdentity } from "../transcript.js";
+import { corroborationIdentityOf, transcriptIdentity } from "../transcript.js";
 import { pruneHostCache } from "../discovery/cache.js";
 
 /**
@@ -29,11 +35,13 @@ import { pruneHostCache } from "../discovery/cache.js";
  * cap remain on disk. Folding those records would inflate `analyzedSessions` beyond the
  * sampled corpus or score positional instruction aliases against an index they never saw.
  * Legacy records stay excluded until ordinary discovery and analysis backfill them.
+ * Current discovery's interaction and corroboration fields are overlaid only after
+ * admission, so stale stamps and observer identities from missing ancestors do not
+ * survive in the fold.
  */
 export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], transcripts = [], { route = null } = {}) {
   const { state, minGapEvidence, gapLedgerMaxAge } = ctx.config;
   const selectedByIdentity = new Map(transcripts.map((transcript) => [transcriptIdentity(transcript), transcript]));
-  const selected = new Set(selectedByIdentity.keys());
   const evidence = state.listEvidence();
   const identitiesByLegacyId = new Map();
   for (const record of evidence) {
@@ -42,26 +50,48 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
     if (!identitiesByLegacyId.has(legacyId)) identitiesByLegacyId.set(legacyId, new Set());
     identitiesByLegacyId.get(legacyId).add(transcriptIdentity(record.transcript));
   }
-  const selectedGapSessions = new Set(selected);
+  const selectedGapSessions = new Set();
+  const selectedObserversByNative = new Map();
+  const legacyIds = new Set();
   for (const transcript of transcripts) {
+    selectedGapSessions.add(corroborationIdentityOf(transcript));
+    const nativeIdentity = transcript.identity || transcript.id;
+    if (!selectedObserversByNative.has(nativeIdentity)) selectedObserversByNative.set(nativeIdentity, new Set());
+    selectedObserversByNative.get(nativeIdentity).add(corroborationIdentityOf(transcript));
     const identities = identitiesByLegacyId.get(transcript.id);
     if (identities?.size === 1 && identities.has(transcriptIdentity(transcript))) {
-      selectedGapSessions.add(transcript.id);
+      legacyIds.add(transcript.id);
+      if (!selectedObserversByNative.has(transcript.id)) selectedObserversByNative.set(transcript.id, new Set());
+      selectedObserversByNative.get(transcript.id).add(corroborationIdentityOf(transcript));
     }
   }
-  const relevant = evidence.filter((e) => {
-    const currentTranscript = selectedByIdentity.get(transcriptIdentity(e.transcript));
-    return (
-      e.memoryPath === memoryFile.path &&
-      e.memoryHash === memoryHash &&
-      (e.transcript?.interaction === INTERACTIVE || e.transcript?.interaction === NON_INTERACTIVE) &&
-      currentTranscript &&
-      isEvidenceFresh(e, currentTranscript, memoryHash)
-    );
-  });
+  const relevant = [];
+  for (const record of evidence) {
+    const currentTranscript = selectedByIdentity.get(transcriptIdentity(record.transcript));
+    if (
+      record.memoryPath !== memoryFile.path ||
+      record.memoryHash !== memoryHash ||
+      (record.transcript?.interaction !== INTERACTIVE && record.transcript?.interaction !== NON_INTERACTIVE) ||
+      !currentTranscript ||
+      !isEvidenceFresh(record, currentTranscript, memoryHash)
+    ) {
+      continue;
+    }
+    const transcript = {
+      ...record.transcript,
+      interactionSignals: currentTranscript.interactionSignals,
+      interaction: classifyInteraction(currentTranscript),
+      parentSessionId: currentTranscript.parentSessionId || null,
+      corroborationIdentity: corroborationIdentityOf(currentTranscript),
+      corroborationNativeId: currentTranscript.corroborationNativeId || null,
+      corroborationStartedAt: currentTranscript.corroborationStartedAt ?? null,
+    };
+    relevant.push({ ...record, transcript });
+  }
 
   const ledger = state.readGapLedger();
-  recordGapObservations(ledger, relevant, { skills });
+  normalizeGapLedgerSessions(ledger, transcripts, { legacyIds });
+  recordGapObservations(ledger, relevant, { skills, legacyIds, transcripts });
   // Consolidate after recording, so the pass sees this run's sightings too: two
   // sessions coining the same brand-new gap in one parallel fan-out can only line up
   // here. One bounded judged call; a failure degrades to lexical identity and the run
@@ -78,9 +108,16 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
   pruneGapLedger(ledger, { memoryFile, memoryPath: memoryFile.path, skills, maxAge: gapLedgerMaxAge });
   state.writeGapLedger(ledger);
 
-  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).filter((observation) =>
-    selectedGapSessions.has(observation.sessionId),
-  );
+  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills)
+    .map((observation) => ({
+      ...observation,
+      sessionId: resolveGapObservationObserver(observation, selectedObserversByNative) ?? observation.sessionId,
+    }))
+    .filter((observation) => {
+      if (!selectedGapSessions.has(observation.sessionId)) return false;
+      const observers = selectedObserversByNative.get(observation.sourceSessionId);
+      return !observers || (observers.size === 1 && observers.has(observation.sessionId));
+    });
   const summary = foldEvidence(relevant, {
     minGapEvidence,
     minGapProjects: ctx.scope?.kind === "user" ? ctx.config.minGapProjects || 1 : 0,

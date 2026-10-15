@@ -217,15 +217,15 @@ It cannot be combined with
 
 backpass reads the local transcript stores of seven harnesses directly. No API, no upload.
 
-| Harness        | Store                                          | Repo tie                                            |
-| -------------- | ---------------------------------------------- | --------------------------------------------------- |
-| **claude**     | `~/.claude/projects/<munged-cwd>/<uuid>.jsonl` | per-line `cwd`                                      |
-| **codex**      | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `cwd` + recorded `git.repository_url`               |
-| **pi**         | standalone and BB-managed Pi JSONL stores      | session-header `cwd`                                |
-| **opencode**   | `~/.local/share/opencode/opencode.db` (sqlite) | `session.directory` / `session_v2.directory`        |
-| **grok**       | `~/.grok/sessions/<encoded-cwd>/<uuid>/`       | `summary.json` `cwd` + `git_remotes`                |
-| **cursor CLI** | `~/.cursor/chats/<md5(cwd)>/<uuid>/`           | `meta.json` `cwd`                                   |
-| **hermes**     | `~/.hermes/state.db` (sqlite)                  | session cwd, with CLI prompt / ACP config fallbacks |
+| Harness        | Store                                           | Repo tie                                            |
+| -------------- | ----------------------------------------------- | --------------------------------------------------- |
+| **claude**     | `~/.claude/projects/<munged-cwd>/<uuid>.jsonl`  | per-line `cwd`                                      |
+| **codex**      | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | `cwd` + recorded `git.repository_url`               |
+| **pi**         | standalone, OMP, and BB-managed Pi JSONL stores | session-header `cwd`                                |
+| **opencode**   | `~/.local/share/opencode/opencode.db` (sqlite)  | `session.directory` / `session_v2.directory`        |
+| **grok**       | `~/.grok/sessions/<encoded-cwd>/<uuid>/`        | `summary.json` `cwd` + `git_remotes`                |
+| **cursor CLI** | `~/.cursor/chats/<md5(cwd)>/<uuid>/`            | `meta.json` `cwd`                                   |
+| **hermes**     | `~/.hermes/state.db` (sqlite)                   | session cwd, with CLI prompt / ACP config fallbacks |
 
 Claude collection covers `$CLAUDE_CONFIG_DIR/projects` alongside the default store, so a
 relocated config dir does not hide its sessions. The variable is read from backpass's own
@@ -237,6 +237,32 @@ sessions under `~/.bb/pi-bridge-sessions/`. It also honors `PI_CODING_AGENT_DIR`
 `PI_CODING_AGENT_SESSION_DIR`, `BB_DATA_DIR`, and `BB_PI_BRIDGE_SESSION_DIR` when they are
 set in backpass's environment. When roots overlap, backpass scans every applicable layout
 and reads each JSONL file once.
+
+OMP (Oh My Pi) collection is **off by default**. Set `discovery.includeOmp` to `true` in
+`.backpassrc.json` or your [personal config](#configuration) to also read
+`~/.omp/agent/sessions/` through the Pi adapter:
+
+```json
+{ "discovery": { "includeOmp": true } }
+```
+
+Then run `backpass scan --harness pi` (or a normal `backpass` run). The setting also
+applies to configured SSH hosts. For `--scope user`, set it in `user.discovery` and
+include `"pi"` in `user.discovery.harnesses`; user scope otherwise collects only Claude
+and Codex. Explicit Pi store environment overrides still work without this setting;
+it controls only the additional default OMP store, not the harness backpass invokes.
+Without it, nothing OMP-specific is read: Pi stores (including `PI_CODING_AGENT_DIR`
+and bridge directories) are listed one level deep and need a `session` header on line 1,
+exactly as before.
+
+OMP nests subagent JSONL files below each parent session, and a subagent's own subagents
+one level further down. Only the OMP store, with the setting on, is walked that deep and
+may open with a `title` record; a `PI_CODING_AGENT_DIR` that points at the same directory
+is treated as that store. Backpass analyzes each file separately. With a readable root header, the session and its
+descendants share one corroborating observer, including across synced SSH stores. If the
+root is unreadable, the highest readable ancestor is used; without one, the file retains
+its own observer identity. Matching descendant copies link their families without merging
+distinct roots on the same host that share a native ID.
 
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
@@ -279,8 +305,8 @@ Windows hosts retain native path handling; backpass does not translate these pat
 Configured SSH hosts are collected after the local stores and join the same corpus, with
 the same tiers, sample and cap - see [Your other machines](#your-other-machines).
 
-Collection is incremental. Codex alone can hold 10,000+ rollouts, so verdicts are cached in
-`.backpass/scan-cache.json` by path, mtime and size - re-scans cost only the new files.
+Collection is incremental: cached file-backed descriptors are reused when their inputs
+are unchanged. The cache rules live in [`src/discovery/index.js`](src/discovery/index.js).
 A harness whose store is missing or has drifted into an unrecognised shape produces a
 warning and is skipped; the run continues.
 backpass's own loss and gradient-descent calls land in these same stores under the repo's cwd; every prompt it sends is tagged, and tagged sessions are excluded from the corpus (the `SELF` column in `backpass scan`).
@@ -289,12 +315,15 @@ OpenCode sessions with no recorded messages, such as unused agent probes, are no
 
 Every remaining session is labelled **interactive** or **non-interactive** (`src/interaction.js`).
 Codex `codex exec` / `originator: codex_exec`, Claude SDK, GitHub, action, and CI
-entrypoints, OpenCode child sessions (`parent_id`), and a cwd with a `.no-mistakes` path
-segment are non-interactive. Hermes gateway, cron, and WhatsApp sessions are classified the
-same way if they leak past collection's source filter. A no-mistakes pipeline run is just one
-kind of non-interactive session, not its own category. Missing harness metadata defaults to
-interactive. `backpass scan`, the proposal, and apply all print the mix so relevance is never
-silently computed against a robot-skewed pool.
+entrypoints, OpenCode child sessions (`parent_id`), OMP subagent transcripts, and a cwd
+with a `.no-mistakes` path segment are non-interactive. Hermes gateway, cron, and WhatsApp
+sessions are classified the same way if they leak past collection's source filter. A
+no-mistakes pipeline run is just one kind of non-interactive session, not its own category.
+Missing harness metadata defaults to interactive. `backpass scan`, the proposal, and apply
+all print the mix so relevance is never silently computed against a robot-skewed pool.
+Standalone `backpass propose` uses current discovery's interaction signals and category
+for admitted cached evidence. Records without a stored category remain excluded until
+analysis backfills them.
 
 ```sh
 backpass scan --since 7d --strict
@@ -399,16 +428,16 @@ Per-transcript failures, such as timeouts or unparseable output, still let the r
 ### 4. Aggregate gradients - and one judged consolidation call
 
 Evidence is grouped by instruction, giving each one a positive/negative count, a count of
-distinct sessions with harm-class negatives, and a **relevance** figure: the share of
+distinct observers with harm-class negatives, and a **relevance** figure: the share of
 analyzed sessions in which it mattered at all. Relevance is reported both overall and
 separately for interactive and non-interactive sessions. The fold also reports memory-file
 units that substantially overlap a project skill. An overlap with a skill description duplicates
 always-loaded tokens and points the shrink at the memory-file copy; an overlap with a
 triggered skill body is placement evidence only, since the memory copy may be the only
 always-loaded coverage. Neither kind is deleted automatically. Duplicate gaps across
-sessions are clustered, and only clusters seen in at least `minGapEvidence` sessions
-(default 2) are eligible for synthesis. Mixed-domain clusters below that floor remain
-visible as report-only diagnostics. One bad session never rewrites the weights.
+sessions are clustered; only clusters meeting the [evidence floor](#5-gradient-descent---native-edits)
+are eligible for synthesis. Mixed-domain clusters below that floor remain visible as
+report-only diagnostics. One bad session never rewrites the weights.
 
 Whether two sightings are one gap is a judgment call, not a word-overlap score - models
 paraphrase, and a paraphrase that fails a lexical match would hide real recurrence.
@@ -418,8 +447,9 @@ consolidation call sees the full open gap set and merges entries that describe t
 mistake. That second judgment is what lets two sightings of a brand-new gap in the same
 run's parallel fan-out corroborate. A failed consolidation call degrades the run to
 lexical identity and says so; it never aborts. All sightings cluster before their domain
-is decided. Each sighting votes `project` or `orchestration`; only a majority-orchestration
-cluster is excluded from synthesis, while a tie stays eligible. Mixed clusters are always
+is decided. Each corroborating observer contributes one `project` or `orchestration` vote;
+related sightings share a vote, with any project sighting making it project. Only a
+majority-orchestration cluster is excluded from synthesis, while a tie stays eligible. Mixed clusters are always
 reported with their orchestration count, even below the evidence floor. A corroborated
 majority-excluded cluster, including a pure-orchestration cluster, remains clearly labeled
 as a report-only diagnostic rather than becoming an instruction in the project's memory
@@ -433,11 +463,11 @@ on disk. That file is left untouched, but it does not count toward this run's se
 or instruction scores, or add a gap observation, until ordinary discovery and analysis
 select and refresh it.
 
-Gap sightings persist across runs in `.backpass/gap-ledger.json` by gap and session, but a
-run only counts observations whose sessions belong to its selected sample. This prevents
-older observations outside the cap from undoing the sample mix while still allowing
-corroboration across runs when those sessions remain selected. The same session never counts
-twice, a sighting retires once the memory file or a project skill covers it, and a session's
+Gap sightings persist across runs in `.backpass/gap-ledger.json`; identity and provenance
+rules live in [`src/gap-ledger.js`](src/gap-ledger.js). A run only counts observations
+admitted under observers in its selected sample. This prevents older observations outside
+the cap from undoing the sample mix while allowing corroboration across runs. Each observer
+counts once per gap, a sighting retires once the memory file or a project skill covers it, and a session's
 sightings expire after `gapLedgerMaxAge` (default 90d). Until a gap corroborates it stays out
 of the proposal entirely.
 
@@ -462,15 +492,16 @@ Then mechanical gates run, and they are not negotiable:
 - every measured change belongs to exactly one annotated edit - an unexplained change
   is a violation, so is an edit that names no change
 - every edit that changes the always-loaded surface - adding, rewriting or removing text -
-  needs quotes from `minGapEvidence` distinct sessions. The count is measured from the
-  edit's own quote sources, and only source labels issued by this run's fold count. A
-  mistyped or invented label does not create another session, and a session count the model
-  reports is ignored. Rewrites are not
+  needs quotes from `minGapEvidence` distinct corroborating observers (default 2). The
+  count is measured from the edit's own quote sources: only labels issued by this run's
+  fold count, and related transcripts share the observer described under [collection](#how-it-works).
+  A mistyped or invented label does not create another observer; model-reported counts
+  are ignored. Rewrites are not
   classified by shape: a one-session tightening is refused along with a one-session
   append, because deciding which is which is a question about meaning that a line diff
   cannot answer. `extract` and `move` are exempt - they keep every always-loaded line.
 - removing a memory-file instruction outright needs harm-class negatives from
-  `minGapEvidence` distinct sessions - non-compliance never counts, because a rule that
+  `minGapEvidence` distinct observers - non-compliance never counts, because a rule that
   was skipped needs reinforcement, not deletion. A pure deletion in a skill file is also
   a removal, but no evidence can attribute harm to skill-file text, so it is refused.
 - an extraction preserves every line it removes in the skills it creates or extends, and
@@ -606,6 +637,9 @@ the same budget gate as synthesis: stay under the cap, or shrink if the file is 
 over. An incompatible set writes nothing and does not record rejections, so you can pick
 a compatible set and try again. If the run shrinks the file but leaves it above the cap,
 that is progress, not a failure: it is written, and the remaining overage is printed.
+The cap is the one the proposal was made under: if the current config (or `--budget`) names
+a different budget for a file the proposal edits, apply refuses before the review, naming
+both numbers, and you either re-run apply with the original budget or propose again.
 
 Apply preflights every decided edit before writing. The proposal was measured against exact
 versions of your memory file and every skill file it proposes editing, so apply first checks
@@ -690,8 +724,9 @@ weight of its own; a missing file is reported, never created:
   addition in the wrong file. A rewrite or removal stays with the file whose text it
   changes, and a failed skill trigger stays with the root, which owns the skill layer.
 - **A budget per file.** Each nested file is held to `nestedBudgetTokens` (`budgetTokens`
-  when unset), at propose and again at apply. An unchanged root over budget does not block
-  a combined proposal if at least one nested file actually runs synthesis with analyzed
+  when unset), at propose and again at apply; apply refuses a nested file whose
+  configured budget changed since the proposal was made. An unchanged root over budget
+  does not block a combined proposal if at least one nested file actually runs synthesis with analyzed
   evidence; if every nested file is skipped, the normal root shrink gate still applies.
   Root edits must still clear that gate, and a nested edit must clear its own file's gate.
   Skills belong to the root surface, so a nested run neither edits a skill nor extracts
@@ -825,6 +860,7 @@ CLI flags on top:
     "since": "30d",
     "worktreeGlobs": [],
     "cloneRoots": [],
+    "includeOmp": false,
     "minUserTurns": 2
   },
   "jobs": 4
@@ -897,7 +933,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
 
 ```
 .backpass/
-  scan-cache.json        collect-samples verdicts by path + mtime + size
+  scan-cache.json        cached collect-samples descriptors (see Collect samples)
   evidence/<identity>.json per-transcript loss
   evidence-summary.json  aggregated gradients
   proposal.json          the latest parseable gradient-descent step (absent if none was produced)
@@ -905,7 +941,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   prompts/               the exact prompts of the last run
   agent-probe-cache.json which harnesses were available and logged in, and when
   rejections.json        edits you turned down, and the evidence behind them
-  gap-ledger.json        gap sightings by gap and session, accumulated across runs
+  gap-ledger.json        durable gap sightings (see Aggregate gradients)
   hosts/                 transcripts fetched from SSH hosts (mode 0700), pruned after 30 days unused
   raw/                   temporary session events (see Distill)
   apply/apply.html       the rendered review surface

@@ -595,6 +595,58 @@ test("a quote counts as a session only when the fold issued its source label", (
   );
 });
 
+test("native OMP quote labels still measure one proposal observer per root", () => {
+  const observed = (nativeId, observer) => ({
+    status: "ok",
+    transcript: {
+      id: `pi-${nativeId}`,
+      identity: `pi-file-${nativeId}`,
+      nativeId,
+      harness: "pi",
+      startedAt: Date.parse("2026-08-02T00:00:00Z"),
+      corroborationIdentity: observer,
+      corroborationNativeId: observer,
+      corroborationStartedAt: Date.parse("2026-08-01T00:00:00Z"),
+      interaction: "non-interactive",
+    },
+    negative: [{ instruction: "AG-001", quote: `harm ${nativeId}`, class: "harm" }],
+    gaps: [{ proposedInstruction: "Read the API contract first.", quote: `gap ${nativeId}` }],
+  });
+  for (const independent of [false, true]) {
+    const summary = foldEvidence([
+      observed("child-a", "root-a"),
+      observed("child-b", independent ? "root-b" : "root-a"),
+    ]);
+    assert.equal(summary.analyzedSessions, 2);
+    assert.equal(summary.sources.length, 2);
+    assert.equal(summary.instructions[0].harmSessions, independent ? 2 : 1);
+    assert.equal(summary.gaps.length, independent ? 1 : 0);
+    const result = gate({
+      edit: memoryEdit(REWRITE_SHAPES["append a sentence"]),
+      annotation: {
+        edits: [
+          claim(["H1"], {
+            kind: "rewrite",
+            evidence: summary.instructions[0].quotes.map((quote) => ({
+              polarity: "negative",
+              text: quote.text,
+              source: quote.source,
+            })),
+          }),
+        ],
+      },
+      context: { summary },
+    });
+    if (independent) {
+      assert.deepEqual(result.violations, []);
+      assert.equal(result.proposal.edits[0].transcripts, 2);
+    } else {
+      assert.equal(result.proposal.edits.length, 0);
+      assert.ok(result.violations.some((violation) => /backed by 1 session\(s\); 2 are required/.test(violation)));
+    }
+  }
+});
+
 test("on the r1 dry-run corpus, only the edit whose second source was never issued is refused", () => {
   const foldRecord = (id, day, quote) => ({
     status: "ok",
@@ -3319,6 +3371,8 @@ test("apply measures a legacy skill rewrite missing descriptionDelta", () => {
   });
   assert.deepEqual(built.violations, []);
   delete built.proposal.edits[0].descriptionDelta;
+  // Legacy in its cap too: a proposal that recorded none is gated at the current config.
+  delete built.proposal.budget.capTokens;
 
   const results = applyDecisions({
     proposal: built.proposal,
@@ -3334,15 +3388,20 @@ test("apply measures a legacy skill rewrite missing descriptionDelta", () => {
 test("post-apply warnings label a newly created skill description as always-loaded", () => {
   const skillText =
     "---\nname: release-signing\ndescription: Release.\n---\n\n- Use Node 18 via nvm before running any script.\n";
-  const built = gate({
-    edit: (root) => {
-      writeIn(root, "AGENTS.md", (text) =>
-        text.replace("- Use Node 18 via nvm before running any script.", "- Use the release skill."),
-      );
-      writeIn(root, ".agents/skills/release-signing/SKILL.md", skillText);
-    },
-    annotation: { edits: [claim(["H1", "H2"], { kind: "extract", title: "extract release setup" })] },
-  });
+  const extract = (budgetTokens = 5000) =>
+    gate({
+      edit: (root) => {
+        writeIn(root, "AGENTS.md", (text) =>
+          text.replace("- Use Node 18 via nvm before running any script.", "- Use the release skill."),
+        );
+        writeIn(root, ".agents/skills/release-signing/SKILL.md", skillText);
+      },
+      annotation: { edits: [claim(["H1", "H2"], { kind: "extract", title: "extract release setup" })] },
+      config: config({ budgetTokens }),
+    });
+  // A shrink step that lands one token over the cap it was made under.
+  const cap = extract().proposal.budget.projected - 1;
+  const built = extract(cap);
   assert.deepEqual(built.violations, []);
   assert.ok(built.proposal.budget.delta < 0);
   delete built.proposal.edits[0].descriptionDelta;
@@ -3352,7 +3411,7 @@ test("post-apply warnings label a newly created skill description as always-load
     decisions: { e1: "accepted" },
     repo: built.repo,
     state: built.state,
-    config: { budgetTokens: built.proposal.budget.projected - 1 },
+    config: { budgetTokens: cap },
     dryRun: true,
   });
   assert.deepEqual(results.failed, []);
