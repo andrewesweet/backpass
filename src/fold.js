@@ -139,7 +139,6 @@ export function foldEvidence(
     const source = recordSources[index];
     sources.add(source);
     if (record.transcript.project) sourceProjects[source] = record.transcript.project;
-    const sessionIdentity = record.transcript.identity || record.transcript.id;
 
     for (const polarity of ["positive", "negative"]) {
       for (const item of record[polarity] || []) {
