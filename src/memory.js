@@ -572,8 +572,17 @@ export function resolveMemoryFiles(repoRoot, memoryFiles, options = {}) {
   const pointers = others.filter(
     (f) =>
       path.basename(f.absolute).toLowerCase() === "claude.md" &&
-      isPointerTo(f.text, primary.absolute, { fromDir: path.dirname(f.absolute) }),
+      (sameRealPath(f.absolute, primary.absolute) ||
+        isPointerTo(f.text, primary.absolute, { fromDir: path.dirname(f.absolute) })),
   );
   const separate = others.filter((f) => !pointers.includes(f));
   return { primary, all: files, pointers, separate, hash: memorySetHash(files) };
+}
+
+function sameRealPath(left, right) {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return false;
+  }
 }

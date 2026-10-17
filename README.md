@@ -62,6 +62,9 @@ npx backpass
 ```
 
 Requires **Node >= 22.5** and [`acpx`](https://github.com/openclaw/acpx) on your PATH.
+The default `backpass apply` review UI also requires [`lavish-axi`](https://github.com/kunchenguid/lavish-axi)
+on your PATH; install it with `npm install -g lavish-axi`. To review in the terminal instead, run
+`backpass apply --no-ui`.
 
 backpass has **no API keys of its own**. Every model call goes through acpx to a harness
 you have already authenticated.
@@ -673,10 +676,11 @@ backpass apply --decisions "e1=accepted e2=rejected:disagree"   # decided elsewh
 `memoryFiles` is an ordered list (default `["AGENTS.md", "CLAUDE.md"]`); the first one
 that exists is the root file a run optimizes, so **AGENTS.md is canonical**. Named
 [nested files](#10-nested-memory-files-in-a-monorepo) are additional weights, not
-separate root files. Resolution is pointer-aware:
+separate root files. A `CLAUDE.md` that imports `AGENTS.md` with `@AGENTS.md`, or is a
+symlink resolving to the same file, is treated as a pointer:
 
-- `CLAUDE.md` containing only `@AGENTS.md` (the standard import) is a pointer: optimizing
-  AGENTS.md covers both harness families and the pointer stays valid. Nothing to report.
+- Optimizing AGENTS.md covers both harness families and the pointer stays valid. Nothing
+  to report.
 - Two separate full files are a divergence hazard. backpass optimizes AGENTS.md, leaves
   CLAUDE.md untouched, and warns each run until you consolidate: move CLAUDE.md's content
   into AGENTS.md and make CLAUDE.md the one-line pointer.
@@ -735,6 +739,22 @@ weight of its own; a missing file is reported, never created:
   with its file and each nested file with its own budget. Apply refuses a saved nested
   edit if that file is no longer named in the current config. The two-session evidence
   floor, remembered rejections, and `apply` as the only writer are unchanged.
+- **Reach.** Every in-repo path counts, reads included, so in a repo where most sessions
+  cross directories a nested file may see too few sessions to ever corroborate a gap. The
+  run summary and `backpass status` show, per nested file, how many sampled sessions
+  worked only under its directory, and warn below `minGapEvidence`, when no add, rewrite,
+  or remove can reach the file:
+
+  ```text
+  nested apps/api/AGENTS.md · 1 of 78 sampled session(s) worked only under apps/api/ · budget ...
+      below minGapEvidence (2); no add, rewrite, or remove edit can reach this file
+  ```
+
+  `status` reads the count recorded at the last attribution (`analyze`, `propose`, or a
+  full run), prints `not yet measured` before one, and reports it under
+  `nestedAttribution` in `--json`; the proposal's `nested` entries carry
+  `sampledSessions`, `minGapEvidence`, and `belowMinGapEvidence`. The count is
+  report-only and never gates a run.
 
 Each nested directory keeps the pointer model above: name its canonical file, and a
 sibling `AGENTS.md` or `CLAUDE.md` that only imports it needs nothing, while a sibling
@@ -751,7 +771,7 @@ exactly the files a run trains, so neither trains a nested file.
 | `backpass analyze` | calculate loss: the tier-1 pass over pending transcripts                                 |
 | `backpass propose` | aggregate gradients + gradient descent: the tier-2 pass from cached evidence             |
 | `backpass apply`   | review and write the accepted edits                                                      |
-| `backpass status`  | cache state, failed transcripts, budget bars, and cross-surface overlaps                 |
+| `backpass status`  | cache state, failed transcripts, budget bars, nested reach, and cross-surface overlaps   |
 | `backpass init`    | initialize the selected scope's config and state                                         |
 
 Run `backpass --help` for the full flag list.
