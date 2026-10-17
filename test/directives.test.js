@@ -119,6 +119,21 @@ test("tabs in a closer advance to four-column stops without hiding the following
   }
 });
 
+test("typed-block adapter preserves instructions after mixed-tab fence closers", () => {
+  const { events } = claude.read({ path: path.join(FIXTURES, "fixtures/claude-indented-fences.jsonl") });
+  assert.equal(events.length, 6, "whitespace-only typed blocks must stay omitted");
+  const { turns } = distill(events, META);
+  assert.deepEqual(
+    turns.map((entry) => entry.envelope),
+    Array(6).fill("Keep the public API stable."),
+    "all six fence variants must retain the following instruction and exclude the paste",
+  );
+  assert.deepEqual(
+    extractDirectives(turns).map((span) => span.id),
+    [TASK_ID, "STEER-2", "STEER-3", "STEER-4", "STEER-5", "STEER-6"],
+  );
+});
+
 test("an unclosed fence still withholds the paste", () => {
   assert.equal(carveEnvelope("Do the migration.\n```\nError: boom"), "Do the migration.");
 });
