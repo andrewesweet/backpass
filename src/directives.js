@@ -36,12 +36,17 @@ export const TASK_ID = "TASK-1";
 export const TASK_AUTHORITY = "direct-task";
 export const STEERING_AUTHORITY = "direct-steering";
 
-const FENCE = /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/;
+// A fence opener may sit behind a list marker: an optional bullet (`-`, `*`, `+`) or
+// ordered marker (digits with `.` or `)`) plus spaces before the fence. Group 1 keeps the
+// whole prefix so the closer indent is measured from the fence's own column - the content
+// column after that marker - not from the start of the line.
+const FENCE = /^([ \t]*(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+)?)(`{3,}|~{3,})([^\n]*)$/;
 const QUOTE = /^\s*>/;
 
-// Tabs advance to the next four-column stop. Fence indentation is relative: an opener
-// may sit at any indentation (a list-item code block is still a fence), while its closer
-// may be indented at most three columns further.
+// Tabs advance to the next four-column stop. Fence indentation is relative: an opener may
+// sit at any indentation, optionally behind a list marker (a list-item code block is still
+// a fence), while its closer may be indented at most three columns past the fence's own
+// column.
 function indentColumns(prefix) {
   let columns = 0;
   for (const char of prefix) columns += char === "\t" ? 4 - (columns % 4) : 1;

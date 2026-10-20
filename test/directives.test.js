@@ -109,6 +109,24 @@ test("tabs in an opener advance to four-column stops without promoting pasted te
   }
 });
 
+test("a list-item fence is a paste; the real instruction after it stays visible", () => {
+  // Regression for greptile P2 on PR 154 (comment 4322029695): an opener behind a list
+  // marker used to stay instruction text and its indented closer opened a phantom fence
+  // that swallowed every later instruction.
+  const envelope = carveEnvelope(
+    ["Check the plan:", "- ```sh", "  rm -rf tests", "  ```", "Then report the checksum."].join("\n"),
+  );
+  assert.ok(!envelope.includes("rm -rf tests"), "the listed paste stays excluded");
+  assert.ok(envelope.includes("Check the plan:"), "text before the paste stays");
+  assert.ok(envelope.includes("Then report the checksum."), "the instruction after the closer stays visible");
+});
+
+test("an ordered-list fence is a paste too", () => {
+  const envelope = carveEnvelope(["1. ```sh", "   make deploy", "   ```", "Ship it."].join("\n"));
+  assert.ok(!envelope.includes("make deploy"), "the ordered-list paste stays excluded");
+  assert.ok(envelope.includes("Ship it."), "the instruction after the closer stays visible");
+});
+
 test("tabs in a closer advance to four-column stops without hiding the following instruction", () => {
   for (const fence of ["```", "~~~"]) {
     for (const spaces of [1, 2, 3]) {
