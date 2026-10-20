@@ -234,6 +234,21 @@ test("evidence is keyed to both the transcript and the memory file it was judged
   assert.equal(isEvidenceFresh(null, transcript, "sha256:aaa"), false);
 });
 
+test("evidence accepted before the list-marker closer fix is stale; version 8 evidence is reusable", () => {
+  const transcript = { identity: "directive-demo", mtimeMs: 111, bytes: 222 };
+  const memoryHash = "sha256:aaa";
+  const previousKey = "directive-demo:111:222:sha256:aaa:analysis-index-v7";
+  const currentKey = "directive-demo:111:222:sha256:aaa:analysis-index-v8";
+
+  assert.equal(
+    isEvidenceFresh({ status: "ok", key: previousKey }, transcript, memoryHash),
+    false,
+    "the approved v7-to-v8 invalidation must reject evidence from the old directive parser",
+  );
+  assert.equal(evidenceKey(transcript, memoryHash), currentKey);
+  assert.equal(isEvidenceFresh({ status: "ok", key: currentKey }, transcript, memoryHash), true);
+});
+
 test("state round-trips through disk and survives a corrupt file", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-state-"));
   const state = new State(dir).ensure();
