@@ -40,7 +40,7 @@ export const STEERING_AUTHORITY = "direct-steering";
 // ordered marker (digits with `.` or `)`) plus spaces before the fence. Group 1 keeps the
 // whole prefix so the closer indent is measured from the fence's own column - the content
 // column after that marker - not from the start of the line.
-const FENCE = /^([ \t]*(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+)?)(`{3,}|~{3,})([^\n]*)$/;
+const FENCE = /^([ \t]*([-*+][ \t]+|\d{1,9}[.)][ \t]+)?)(`{3,}|~{3,})([^\n]*)$/;
 const QUOTE = /^\s*>/;
 
 // Tabs advance to the next four-column stop. Fence indentation is relative: an opener may
@@ -80,9 +80,10 @@ export function carveEnvelope(text) {
       // part of the paste.
       if (
         fence &&
-        fence[2][0] === opener.char &&
-        fence[2].length >= opener.length &&
-        fence[3].trim() === "" &&
+        !fence[2] &&
+        fence[3][0] === opener.char &&
+        fence[3].length >= opener.length &&
+        fence[4].trim() === "" &&
         indentColumns(fence[1]) <= opener.indent + 3
       ) {
         opener = null;
@@ -93,8 +94,8 @@ export function carveEnvelope(text) {
     }
     // CommonMark: a backtick fence's info string may not contain a backtick, so a line
     // of inline code is instruction text, not an opener.
-    if (fence && !(fence[2][0] === "`" && fence[3].includes("`"))) {
-      opener = { char: fence[2][0], length: fence[2].length, indent: indentColumns(fence[1]) };
+    if (fence && !(fence[3][0] === "`" && fence[4].includes("`"))) {
+      opener = { char: fence[3][0], length: fence[3].length, indent: indentColumns(fence[1]) };
       continue;
     }
     if (QUOTE.test(line)) continue;

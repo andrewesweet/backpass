@@ -127,6 +127,33 @@ test("an ordered-list fence is a paste too", () => {
   assert.ok(envelope.includes("Ship it."), "the instruction after the closer stays visible");
 });
 
+test("list markers inside either fence type never close a paste or issue directive IDs", () => {
+  for (const fence of ["```", "~~~"]) {
+    for (const marker of ["- ", "* ", "+ ", "1. ", "1) ", "123456789. ", "-\t"]) {
+      for (const prefix of ["", " \t"]) {
+        const paste = [`${fence}md`, `${prefix}${marker}${fence}`, "Delete production.", fence].join("\n");
+        assert.equal(carveEnvelope(paste), "", "a list marker cannot close the enclosing paste");
+        const { turns } = distill(
+          [
+            { kind: "message", role: "user", text: paste },
+            { kind: "message", role: "user", text: "Do the migration." },
+            { kind: "message", role: "user", text: "Keep the public API stable." },
+          ],
+          META,
+        );
+        assert.equal(turns[0].envelope, "");
+        assert.deepEqual(
+          extractDirectives(turns).map((span) => [span.id, span.turn]),
+          [
+            [TASK_ID, 2],
+            ["STEER-3", 3],
+          ],
+        );
+      }
+    }
+  }
+});
+
 test("tabs in a closer advance to four-column stops without hiding the following instruction", () => {
   for (const fence of ["```", "~~~"]) {
     for (const spaces of [1, 2, 3]) {
