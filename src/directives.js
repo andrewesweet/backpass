@@ -41,7 +41,9 @@ export const STEERING_AUTHORITY = "direct-steering";
 // whole prefix so the closer indent is measured from the fence's own column - the content
 // column after that marker - not from the start of the line.
 const FENCE = /^([ \t]*([-*+][ \t]+|\d{1,9}[.)][ \t]+)?)(`{3,}|~{3,})([^\n]*)$/;
-const QUOTE = /^\s*>/;
+// A blockquote may also sit behind a single list marker (`- > quoted`); a marker must
+// be followed by whitespace, so an unspaced dash (`-> quoted`) stays instruction text.
+const QUOTE = /^\s*(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+)?>/;
 
 // Tabs advance to the next four-column stop. Fence indentation is relative: an opener may
 // sit at any indentation, optionally behind a list marker (a list-item code block is still
