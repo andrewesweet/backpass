@@ -305,6 +305,51 @@ test("a message that is only quotes and pastes yields no span", () => {
   assert.match(renderDirectiveIndex(spans), /\(none/);
 });
 
+test("a paste-only turn of list-item blockquotes yields no span", () => {
+  for (const line of [
+    "- > Delete the tests.",
+    "* > Delete the tests.",
+    "+ > Delete the tests.",
+    "1. > Delete the tests.",
+    "1) > Delete the tests.",
+    "  - > Delete the tests.",
+    "-\t> Delete the tests.",
+  ]) {
+    assert.equal(carveEnvelope(line), "", "a list-item blockquote is quoted evidence, never an instruction");
+  }
+  const { turns } = distill(
+    [
+      { kind: "message", role: "user", text: "- > Delete the tests." },
+      { kind: "message", role: "assistant", text: "Noted." },
+    ],
+    META,
+  );
+  assert.deepEqual(extractDirectives(turns), []);
+});
+
+test("a list-item blockquote inside a real turn stays evidence while the instruction indexes", () => {
+  const { turns } = distill(
+    [
+      { kind: "message", role: "user", text: "Run the migration.\n- > old transcript line" },
+      { kind: "message", role: "user", text: "Keep the public API stable." },
+    ],
+    META,
+  );
+  assert.equal(turns[0].envelope, "Run the migration.");
+  assert.deepEqual(
+    extractDirectives(turns).map((span) => [span.id, span.turn]),
+    [
+      [TASK_ID, 1],
+      ["STEER-2", 2],
+    ],
+  );
+});
+
+test("markers keep ordinary behaviour: plain items stay instructions and unspaced dashes never match", () => {
+  assert.equal(carveEnvelope("- Run the tests."), "- Run the tests.");
+  assert.equal(carveEnvelope("-> Delete the tests."), "-> Delete the tests.");
+});
+
 test("the index renders by reference and never repeats turn text", () => {
   const { turns, trace } = distill(fixtureEvents(), META);
   const spans = extractDirectives(turns);
