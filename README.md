@@ -382,8 +382,8 @@ analysis is shown the ledger's open gaps so it can cite an existing gap id inste
 coining a paraphrase of it.
 
 Much of what governs a session comes from the user directly rather than from a memory file,
-so those instructions are addressable too. The user's own task message (`TASK-1`) and each
-later steering turn (`STEER-<turn>`) become citable instruction sources with their own
+so those instructions are addressable too. The first user turn with authoritative text (`TASK-1`) and each
+later such turn (`STEER-<turn>`) become citable instruction sources with their own
 authority, alongside the memory-file ids. Only the authoritative part of a user turn counts:
 fenced blocks and quoted lines are pasted evidence, never instructions, and assistant or tool
 text never becomes one. The index references a trace turn without repeating its text.

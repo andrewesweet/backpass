@@ -74,9 +74,9 @@ export function carveEnvelope(text) {
   for (const line of String(text ?? "").split("\n")) {
     const fence = FENCE.exec(line);
     if (opener) {
-      // CommonMark: only a fence of the opener's character, at least as long, with
-      // nothing but whitespace after it and indented no more than three columns past
-      // the opener, closes the block. A shorter, different or deeper inner fence is
+      // CommonMark: a closer must have a whitespace-only prefix, use the opener's
+      // character at least as many times, have only whitespace after it, and sit at most
+      // three columns past the opener. A shorter, different or deeper inner fence is
       // part of the paste.
       if (
         fence &&
