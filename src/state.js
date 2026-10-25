@@ -248,7 +248,7 @@ function migrateEvidenceRecord(record, transcript, identity) {
   };
 }
 
-export const ANALYSIS_INDEX_VERSION = 9;
+export const ANALYSIS_INDEX_VERSION = 10;
 
 /**
  * Cache key for a transcript's analysis: its content signature, the memory-surface hash,

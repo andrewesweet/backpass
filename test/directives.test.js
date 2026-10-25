@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { distill } from "../src/distill.js";
-import { sanitizeEvidence } from "../src/analyze.js";
+import { analyzeTranscripts, sanitizeEvidence } from "../src/analyze.js";
+import { readTranscript } from "../src/discovery/index.js";
+import { State } from "../src/state.js";
 import { foldEvidence, renderEvidenceForPrompt, renderEvidenceReport } from "../src/fold.js";
 import { parseMemoryUnits } from "../src/memory.js";
 import { estimateTokens } from "../src/tokens.js";
@@ -264,6 +267,120 @@ test("the first user turn is the task, later ones are steering; assistant and to
   );
   assert.ok(isDirectiveId("TASK-1") && isDirectiveId("STEER-4"));
   assert.ok(!isDirectiveId("AG-001") && !isDirectiveId("TASK-2") && !isDirectiveId("banana"));
+});
+
+test("a discarded transcript prefix withholds task authority and persists unstable steering", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-partial-directives-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const formats = {
+    claude: (role, text) => ({ type: role, message: { content: text } }),
+    codex: (role, text) => ({ type: "response_item", payload: { type: "message", role, content: text } }),
+    pi: (role, text) => ({ type: "message", message: { role, content: text } }),
+    grok: (role, text) => ({ type: role, content: text }),
+  };
+  const padding = "x".repeat(1024 * 1024);
+  for (const [harness, message] of Object.entries(formats)) {
+    const file = path.join(root, `${harness}.jsonl`);
+    const appendMessage = (role, text) => fs.appendFileSync(file, `${JSON.stringify(message(role, text))}\n`);
+    appendMessage("user", "Migrate the auth module.");
+    appendMessage("assistant", "Working on it.");
+    appendMessage("user", "Keep the public API stable.");
+    const transcript = { ...META, harness, path: file, extra: { chatPath: file } };
+    const complete = await readTranscript(transcript);
+    assert.equal(complete.prefixDiscarded, false);
+    const completeSpans = extractDirectives(distill(complete.events, { ...META, ...complete }).turns);
+    assert.deepEqual(
+      directiveMetadata(completeSpans).map(({ id, partial, stable }) => [id, partial, stable]),
+      [
+        [TASK_ID, false, true],
+        ["STEER-3", false, true],
+      ],
+      "a complete transcript retains the initial task and stable turn IDs",
+    );
+
+    fs.appendFileSync(file, '{"type":"padding","text":"');
+    for (let i = 0; i < 64; i += 1) fs.appendFileSync(file, padding);
+    fs.appendFileSync(file, '"}\n');
+    appendMessage("user", "Now run the tests too.");
+    appendMessage("assistant", "Tests pass.");
+    appendMessage("user", "Report the results.");
+
+    for (const remote of [false, true]) {
+      const state = new State(root, {
+        stateDir: path.join(root, `${harness}-${remote ? "remote" : "local"}`),
+        exclude: false,
+      }).ensure();
+      const ref = remote
+        ? { ...transcript, host: "fixture-host", remote: { kind: "raw", cachePath: file } }
+        : transcript;
+      const raw = await readTranscript(ref);
+      assert.equal(raw.prefixDiscarded, true, `${harness}: prefix loss must survive transcript reading`);
+      assert.deepEqual(
+        raw.events.map((event) => event.text),
+        ["Now run the tests too.", "Tests pass.", "Report the results."],
+        "only the tail survives; the original task is unavailable",
+      );
+      const summary = await analyzeTranscripts({
+        transcripts: [ref],
+        memoryFile: { path: "AGENTS.md", units: [] },
+        memoryHash: "memory",
+        repo: { root },
+        config: {
+          state,
+          jobs: 1,
+          discovery: { minUserTurns: 1 },
+          agents: {
+            resolve: async () => ({ agent: "pi" }),
+            withFallthrough: async () => ({
+              text: JSON.stringify({
+                positive: [
+                  { instruction: "TASK-1", quote: "Now run the tests too.", effect: "invented task authority" },
+                  { instruction: "STEER-1", quote: "Now run the tests too.", effect: "ran tests" },
+                  { instruction: "STEER-3", quote: "Report the results.", effect: "reported results" },
+                ],
+                negative: [],
+                gaps: [],
+              }),
+            }),
+          },
+        },
+      });
+      assert.equal(summary.analyzed, 1);
+      const evidence = state.readEvidence(ref);
+      assert.deepEqual(evidence.directives, [
+        {
+          id: "STEER-1",
+          kind: "steering",
+          turn: 1,
+          authority: "direct-steering",
+          partial: true,
+          stable: false,
+          lifetime: { fromTurn: 1, toTurn: null },
+        },
+        {
+          id: "STEER-3",
+          kind: "steering",
+          turn: 3,
+          authority: "direct-steering",
+          partial: true,
+          stable: false,
+          lifetime: { fromTurn: 3, toTurn: null },
+        },
+      ]);
+      assert.deepEqual(
+        evidence.positive.map((item) => item.instruction),
+        ["STEER-1", "STEER-3"],
+      );
+      const promptDir = path.join(state.root, "prompts");
+      const prompt = fs.readFileSync(path.join(promptDir, fs.readdirSync(promptDir)[0]), "utf8");
+      assert.match(
+        prompt,
+        /\[STEER-1\] steering · turn 1 · authority direct-steering · partial transcript · unstable id/,
+      );
+      assert.doesNotMatch(prompt, /\[TASK-1\] task · turn/);
+      assert.ok(!JSON.stringify(evidence.directives).includes("Now run the tests too."));
+    }
+  }
 });
 
 test("a short imperative is addressable: length never decides which turn is the task", () => {

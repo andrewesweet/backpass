@@ -130,6 +130,7 @@ export function distill(events, meta, options = {}) {
       turns.push({
         turn,
         role: event.role,
+        partial: meta.prefixDiscarded === true,
         text,
         envelope: event.role === "user" ? carveEnvelope(redacted) : "",
         // The envelope is carved pre-clamp, so a clamped turn's instruction may be absent

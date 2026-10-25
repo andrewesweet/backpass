@@ -119,12 +119,14 @@ export function extractDirectives(turns) {
   for (const entry of Array.isArray(turns) ? turns : []) {
     if (!entry || entry.role !== "user") continue;
     if (!entry.envelope) continue;
-    const span = !seenFirstUser
-      ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
-      : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
+    const span =
+      !seenFirstUser && !entry.partial
+        ? { id: TASK_ID, kind: "task", turn: entry.turn, authority: TASK_AUTHORITY }
+        : { id: steeringId(entry.turn), kind: "steering", turn: entry.turn, authority: STEERING_AUTHORITY };
     seenFirstUser = true;
     spans.push({
       ...span,
+      partial: entry.partial === true,
       elided: entry.elided === true,
       clamped: entry.clamped === true,
       lifetime: { fromTurn: entry.turn, toTurn: null },
@@ -140,6 +142,8 @@ export function directiveMetadata(spans) {
     kind: span.kind,
     turn: span.turn,
     authority: span.authority,
+    partial: span.partial === true,
+    stable: span.partial !== true,
     lifetime: { ...span.lifetime },
   }));
 }
@@ -156,6 +160,7 @@ export function renderDirectiveIndex(spans) {
     .map(
       (span) =>
         `[${span.id}] ${span.kind} · turn ${span.turn} · authority ${span.authority} · ` +
+        (span.partial ? "partial transcript · unstable id · " : "") +
         `lifetime turns ${span.lifetime?.fromTurn ?? span.turn}+ - ` +
         (span.elided
           ? `turn ${span.turn} - elided from the trace, open the raw transcript for its text`

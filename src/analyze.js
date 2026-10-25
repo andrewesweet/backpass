@@ -266,6 +266,7 @@ async function analyzeOne({
   const distilled = distill(raw.events, {
     ...transcript,
     model: raw.model,
+    prefixDiscarded: raw.prefixDiscarded,
     rawPath: rawFile ?? raw.rawPath,
   });
 
