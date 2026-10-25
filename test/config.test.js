@@ -234,16 +234,16 @@ test("evidence is keyed to both the transcript and the memory file it was judged
   assert.equal(isEvidenceFresh(null, transcript, "sha256:aaa"), false);
 });
 
-test("evidence accepted before the list-item quote fix is stale; version 9 evidence is reusable", () => {
+test("evidence accepted before the partial-transcript fix is stale; version 10 evidence is reusable", () => {
   const transcript = { identity: "directive-demo", mtimeMs: 111, bytes: 222 };
   const memoryHash = "sha256:aaa";
-  const previousKey = "directive-demo:111:222:sha256:aaa:analysis-index-v8";
-  const currentKey = "directive-demo:111:222:sha256:aaa:analysis-index-v9";
+  const previousKey = "directive-demo:111:222:sha256:aaa:analysis-index-v9";
+  const currentKey = "directive-demo:111:222:sha256:aaa:analysis-index-v10";
 
   assert.equal(
     isEvidenceFresh({ status: "ok", key: previousKey }, transcript, memoryHash),
     false,
-    "the approved v8-to-v9 invalidation must reject evidence from the old directive parser",
+    "the approved v9-to-v10 invalidation must reject evidence without partial-transcript provenance",
   );
   assert.equal(evidenceKey(transcript, memoryHash), currentKey);
   assert.equal(isEvidenceFresh({ status: "ok", key: currentKey }, transcript, memoryHash), true);
